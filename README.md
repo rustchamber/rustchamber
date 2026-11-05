@@ -11,6 +11,8 @@ RustChamber talks to the OpenCode server directly over HTTP and Server-Sent Even
 terminal, files, changes, and git live in the same window, with a keyboard-first interface
 built for long sessions.
 
+[rustchamber.lipecode.com](https://rustchamber.lipecode.com) — download, support, and roadmap.
+
 ![RustChamber home screen](docs/screenshots/home.png)
 
 ## Install
