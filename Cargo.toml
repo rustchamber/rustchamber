@@ -15,8 +15,8 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 authors = ["Felipe Silva Machado"]
-repository = "https://github.com/LipeMachado/rustchamber"
-homepage = "https://github.com/LipeMachado/rustchamber"
+repository = "https://github.com/rustchamber/rustchamber"
+homepage = "https://github.com/rustchamber/rustchamber"
 
 [workspace.dependencies]
 anyhow = "1"

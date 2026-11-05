@@ -2,8 +2,8 @@
 
 ## First push to GitHub
 
-Create an empty repository named `rustchamber` on GitHub. Do not initialize it with a
-README, license, or `.gitignore`; the local tree already has those.
+Create an empty repository named `rustchamber` in the `rustchamber` GitHub organization. Do
+not initialize it with a README, license, or `.gitignore`; the local tree already has those.
 
 ```bash
 cd rustchamber
@@ -19,13 +19,13 @@ another project and is about 395 MB.
 ```bash
 git commit -m "RustChamber 0.0.1-alpha"
 git branch -M main
-git remote add origin git@github.com:LipeMachado/rustchamber.git
+git remote add origin git@github.com:rustchamber/rustchamber.git
 git push -u origin main
 ```
 
 The repository URL in `Cargo.toml`, the About window, and the README points to
-`LipeMachado/rustchamber`. If the final repository uses another account or name, update
-those three places.
+`rustchamber/rustchamber`. If the repository moves to another account or name, update those
+three places.
 
 For the repository page:
 
@@ -58,11 +58,11 @@ Before tagging, bump the workspace version in `Cargo.toml` and add the matching 
 
 ## Homebrew tap
 
-The cask lives in the [LipeMachado/homebrew-tap](https://github.com/LipeMachado/homebrew-tap)
+The cask lives in the [rustchamber/homebrew-tap](https://github.com/rustchamber/homebrew-tap)
 repository at `Casks/rustchamber.rb`. Users install with:
 
 ```bash
-brew install --cask LipeMachado/tap/rustchamber
+brew install --cask rustchamber/tap/rustchamber
 ```
 
 After the release is published, the `homebrew` job in the release workflow updates the
@@ -153,4 +153,4 @@ Keep the asset names parallel (`RustChamber-<version>-linux-x86_64.tar.gz`,
 - [ ] Tag pushed
 - [ ] Release assets present and the DMG opens
 - [ ] Homebrew cask updated by the `homebrew` job
-- [ ] `brew install --cask LipeMachado/tap/rustchamber` opens without a Gatekeeper prompt
+- [ ] `brew install --cask rustchamber/tap/rustchamber` opens without a Gatekeeper prompt

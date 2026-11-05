@@ -18,19 +18,19 @@ built for long sessions.
 ### Homebrew
 
 ```bash
-brew install --cask LipeMachado/tap/rustchamber
+brew install --cask rustchamber/tap/rustchamber
 ```
 
 The cask installs the universal build and clears the macOS quarantine flag, so the app
 opens without the "Apple could not verify" dialog. If you already installed RustChamber
 from the DMG, adopt it once with
-`brew install --cask --adopt LipeMachado/tap/rustchamber`. Upgrade with
+`brew install --cask --adopt rustchamber/tap/rustchamber`. Upgrade with
 `brew upgrade --cask rustchamber`; remove settings as well with
 `brew uninstall --zap --cask rustchamber`.
 
 ### Direct download
 
-macOS builds are published on the [Releases](https://github.com/LipeMachado/rustchamber/releases)
+macOS builds are published on the [Releases](https://github.com/rustchamber/rustchamber/releases)
 page as a universal disk image for Apple Silicon and Intel.
 
 1. Download `RustChamber-<version>-macos-universal.dmg`.
@@ -54,7 +54,7 @@ Linux and Windows packages are not published yet. Both platforms build from sour
 Requirements: Rust 1.95+, a C toolchain, and the `opencode` CLI.
 
 ```bash
-git clone https://github.com/LipeMachado/rustchamber.git
+git clone https://github.com/rustchamber/rustchamber.git
 cd rustchamber
 cargo run -p rchamber --release
 ```

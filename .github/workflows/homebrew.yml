@@ -24,7 +24,7 @@ jobs:
       - name: Check out tap
         uses: actions/checkout@v4
         with:
-          repository: LipeMachado/homebrew-tap
+          repository: rustchamber/homebrew-tap
           ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
 
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           VERSION="${VERSION#v}"
           DMG="RustChamber-${VERSION}-macos-universal.dmg"
-          URL="https://github.com/LipeMachado/rustchamber/releases/download/v${VERSION}/${DMG}"
+          URL="https://github.com/rustchamber/rustchamber/releases/download/v${VERSION}/${DMG}"
 
           curl -fsSL "$URL" -o "$RUNNER_TEMP/app.dmg"
           SHA="$(sha256sum "$RUNNER_TEMP/app.dmg" | cut -d' ' -f1)"
