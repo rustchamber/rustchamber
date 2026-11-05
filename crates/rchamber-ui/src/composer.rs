@@ -214,7 +214,7 @@ pub fn floating(
             .insert_temp(Id::unique(("composer-bounds", key.as_str(), home)), bounds);
     });
     let area = egui::Area::new(Id::unique(("composer-area", key.as_str(), home)))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .fixed_pos(position)
         .constrain(false)
         .show(&ctx, |ui| {

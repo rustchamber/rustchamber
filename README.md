@@ -92,6 +92,8 @@ This needs `jq` and both Apple targets. The output lands in `dist/`.
 
 ![RustChamber chat with session context](docs/screenshots/chat.png)
 
+![RustChamber git panel with an unstaged README change](docs/screenshots/git.png)
+
 ## Settings and appearance
 
 ![RustChamber appearance settings](docs/screenshots/settings.png)

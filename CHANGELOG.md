@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.2-alpha
+
+- The settings window now paints above the composer, so the input no longer covers the dialog.
+- README screenshots refreshed in the RustChamber light theme, with a new git panel shot.
+
 ## 0.0.1-alpha
 
 First public alpha build.
