@@ -68,9 +68,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip --clobber
+            if (( ${#prerelease[@]} )); then
+              gh release edit "$GITHUB_REF_NAME" "${prerelease[@]}"
+            fi
           else
             gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip \
-              --title "RustChamber $VERSION" --generate-notes
+              --title "RustChamber $VERSION" --generate-notes "${prerelease[@]}"
           fi
+
+  homebrew:
+    needs: macos
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit

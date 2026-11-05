@@ -13,7 +13,20 @@ built for long sessions.
 
 ![RustChamber home screen](docs/screenshots/home.png)
 
-## Download
+## Install
+
+### Homebrew
+
+```bash
+brew install --cask LipeMachado/tap/rustchamber
+```
+
+The cask installs the universal build and clears the macOS quarantine flag, so the app
+opens without the "Apple could not verify" dialog. Upgrade with
+`brew upgrade --cask rustchamber`; remove settings as well with
+`brew uninstall --zap --cask rustchamber`.
+
+### Direct download
 
 macOS builds are published on the [Releases](https://github.com/LipeMachado/rustchamber/releases)
 page as a universal disk image for Apple Silicon and Intel.
@@ -23,9 +36,10 @@ page as a universal disk image for Apple Silicon and Intel.
 3. Install the [OpenCode CLI](https://opencode.ai/docs) and make sure `opencode` is on your
    `PATH`.
 
-Builds are ad-hoc signed unless Apple Developer credentials are configured. macOS may block
-the first launch; open System Settings → Privacy & Security and choose **Open Anyway**. If
-the app is reported as damaged, clear the quarantine flag:
+Builds are ad-hoc signed unless Apple Developer credentials are configured. A direct
+download is quarantined by macOS, so the first launch is blocked; open System Settings →
+Privacy & Security and choose **Open Anyway**. If the app is reported as damaged, clear the
+quarantine flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/RustChamber.app

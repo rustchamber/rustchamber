@@ -50,10 +50,36 @@ GitHub Actions builds a universal macOS binary (arm64 + x86_64), creates
 - `RustChamber-0.0.1-alpha-macos-universal.zip`
 
 The DMG contains the app and an Applications shortcut. The ZIP is there for users who
-prefer it.
+prefer it. Versions with a prerelease suffix, such as `0.0.1-alpha`, are published as a
+GitHub prerelease automatically.
 
 Before tagging, bump the workspace version in `Cargo.toml` and add the matching section to
 `CHANGELOG.md`.
+
+## Homebrew tap
+
+The cask lives in the [LipeMachado/homebrew-tap](https://github.com/LipeMachado/homebrew-tap)
+repository at `Casks/rustchamber.rb`. Users install with:
+
+```bash
+brew install --cask LipeMachado/tap/rustchamber
+```
+
+After the release is published, the `homebrew` job in the release workflow updates the
+cask version and `sha256` and pushes the change to the tap. It authenticates with the
+`HOMEBREW_TAP_DEPLOY_KEY` secret, an SSH deploy key with write access to the tap
+repository. Rotate it by generating a new key, adding the public half under the tap's
+Settings → Deploy keys, and storing the private half in the secret.
+
+To update the cask without cutting a new release, run the workflow manually:
+
+```bash
+gh workflow run homebrew.yml -f version=0.0.1-alpha
+```
+
+The cask runs a `postflight` that removes `com.apple.quarantine` from the installed app.
+Builds are not notarized, so this is what keeps Homebrew installs from showing the
+Gatekeeper dialog. Remove that step once the project ships a notarized Developer ID build.
 
 ## Build a release locally
 
@@ -84,12 +110,15 @@ The workflow imports the certificate into a temporary keychain, signs with the h
 runtime, notarizes the app and the disk image with `notarytool`, and staples both tickets.
 If the secrets are absent, the workflow still publishes an ad-hoc signed build.
 
-Ad-hoc builds are quarantined by macOS after download. Users can open them through
+Ad-hoc builds are quarantined by macOS after a direct download. Users can open them through
 System Settings → Privacy & Security, or remove the flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/RustChamber.app
 ```
+
+Homebrew installs skip that dialog because the cask removes the quarantine attribute after
+installation. The direct DMG still needs notarization to open cleanly on first launch.
 
 To export the certificate:
 
@@ -101,7 +130,7 @@ Paste the result into the `APPLE_CERTIFICATE` secret.
 
 ## Adding Linux and Windows
 
-The release workflow currently has one job, `macos`. To add the other targets, create jobs
+The release workflow currently builds only macOS. To add the other targets, create jobs
 with the same structure:
 
 - **Linux** — build on `ubuntu-24.04`, install `libxkbcommon-dev` and the xcb development
@@ -122,3 +151,5 @@ Keep the asset names parallel (`RustChamber-<version>-linux-x86_64.tar.gz`,
 - [ ] `git status` contains no `labs/`, `target/`, or `dist/`
 - [ ] Tag pushed
 - [ ] Release assets present and the DMG opens
+- [ ] Homebrew cask updated by the `homebrew` job
+- [ ] `brew install --cask LipeMachado/tap/rustchamber` opens without a Gatekeeper prompt
