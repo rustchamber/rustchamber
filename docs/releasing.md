@@ -77,7 +77,8 @@ To update the cask without cutting a new release, run the workflow manually:
 gh workflow run homebrew.yml -f version=0.0.1-alpha
 ```
 
-The cask runs a `postflight` that removes `com.apple.quarantine` from the installed app.
+The cask runs a `postflight_steps` step that removes `com.apple.quarantine` from the
+installed app.
 Builds are not notarized, so this is what keeps Homebrew installs from showing the
 Gatekeeper dialog. Remove that step once the project ships a notarized Developer ID build.
 
