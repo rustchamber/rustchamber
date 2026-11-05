@@ -1,0 +1,18 @@
+# Changelog
+
+## 0.0.1-alpha
+
+First public alpha build.
+
+- Native egui desktop client for OpenCode over HTTP and SSE.
+- Managed `opencode serve` lifecycle with automatic port, password, and reconnect.
+- Streaming chat with reasoning, tool cards, permission prompts, and queued prompts.
+- Session list, search, create, rename, archive, and delete.
+- Model, effort, and agent pickers.
+- Composer with file, folder, snippet, skill, and command mentions.
+- Attachments with HEIC conversion and Office/ODF text extraction.
+- Files panel with tree browsing, editor, save, and large-file guard.
+- Session diff and native git panel with stage, commit, branch, log, push, and pull.
+- PTY terminal with tabs and a VT emulator.
+- Theme engine with light and dark pairs, bundled fonts, density, and typography controls.
+- Command palette, keyboard shortcuts, and a settings window.

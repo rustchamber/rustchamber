@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/rchamber-api",
+  "crates/rchamber-git",
+  "crates/rchamber-term",
+  "crates/rchamber-app",
+  "crates/rchamber-ui",
+  "crates/rchamber",
+]
+
+[workspace.package]
+version = "0.0.1-alpha"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["Felipe Silva Machado"]
+repository = "https://github.com/LipeMachado/rustchamber"
+homepage = "https://github.com/LipeMachado/rustchamber"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+directories = "6"
+eframe = { version = "0.37", default-features = true, features = ["persistence"] }
+egui = "0.37"
+egui_commonmark = "0.26"
+egui_extras = { version = "0.37", features = ["image", "svg"] }
+futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+open = "5"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+rfd = "0.15"
+portable-pty = "0.9"
+vte = "0.15"
+shell-words = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "process",
+  "sync",
+  "time",
+  "fs",
+  "io-util",
+  "net",
+] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

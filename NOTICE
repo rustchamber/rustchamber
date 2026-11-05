@@ -1,0 +1,29 @@
+RustChamber
+============
+
+Portions of the layout, component structure, measurements and interaction behaviour are
+translated from OpenChamber v2.6.0:
+
+  https://github.com/openchamber/openchamber
+  Copyright (c) 2025 Bohdan Triapitsyn
+  Licensed under the MIT License. See licenses/OpenChamber-MIT.txt.
+
+The Rust/egui implementation is original work distributed under the MIT License.
+
+OpenCode (https://opencode.ai) is a separate project and is not bundled with this
+repository's source. It is used at runtime as an external server.
+
+Icons
+-----
+
+Icon shapes are derived from Rust/UI Icons (https://rust-ui.com/icons), licensed under the
+MIT License. See licenses/RustUI-MIT.txt.
+
+The icon set also contains shapes ported from Lucide (https://lucide.dev), licensed under
+the ISC License, including icons derived from Feather. See licenses/Lucide-ISC.txt.
+
+Fonts
+-----
+
+Inter, JetBrains Mono, and Instrument Serif are bundled under the SIL Open Font License 1.1.
+See licenses/OFL-1.1.txt.

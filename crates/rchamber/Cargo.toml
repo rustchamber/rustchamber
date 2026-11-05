@@ -1,0 +1,22 @@
+[package]
+name = "rchamber"
+description = "Native Rust workspace for OpenCode agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rchamber"
+path = "src/main.rs"
+
+[dependencies]
+rchamber-api = { path = "../rchamber-api" }
+rchamber-app = { path = "../rchamber-app" }
+rchamber-ui = { path = "../rchamber-ui" }
+anyhow.workspace = true
+eframe.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

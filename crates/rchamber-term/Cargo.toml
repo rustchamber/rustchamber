@@ -1,0 +1,15 @@
+[package]
+name = "rchamber-term"
+description = "Native PTY and terminal emulation for RustChamber"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+egui.workspace = true
+portable-pty.workspace = true
+thiserror.workspace = true
+vte.workspace = true

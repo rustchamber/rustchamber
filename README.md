@@ -1,0 +1,174 @@
+<p align="center">
+  <img src="packaging/macos/AppIcon.png" width="88" alt="RustChamber icon">
+</p>
+
+# RustChamber
+
+A native desktop workspace for [OpenCode](https://opencode.ai), written in Rust with
+`egui`. There is no webview, no Electron, and no JavaScript runtime.
+
+RustChamber talks to the OpenCode server directly over HTTP and Server-Sent Events. Chat,
+terminal, files, changes, and git live in the same window, with a keyboard-first interface
+built for long sessions.
+
+![RustChamber home screen](docs/screenshots/home.png)
+
+## Download
+
+macOS builds are published on the [Releases](https://github.com/LipeMachado/rustchamber/releases)
+page as a universal disk image for Apple Silicon and Intel.
+
+1. Download `RustChamber-<version>-macos-universal.dmg`.
+2. Open the image and drag RustChamber to Applications.
+3. Install the [OpenCode CLI](https://opencode.ai/docs) and make sure `opencode` is on your
+   `PATH`.
+
+Builds are ad-hoc signed unless Apple Developer credentials are configured. macOS may block
+the first launch; open System Settings → Privacy & Security and choose **Open Anyway**. If
+the app is reported as damaged, clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/RustChamber.app
+```
+
+Linux and Windows packages are not published yet. Both platforms build from source.
+
+## Build from source
+
+Requirements: Rust 1.95+, a C toolchain, and the `opencode` CLI.
+
+```bash
+git clone https://github.com/LipeMachado/rustchamber.git
+cd rustchamber
+cargo run -p rchamber --release
+```
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt install libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+To build the macOS app bundle and disk image locally:
+
+```bash
+bash scripts/package-macos.sh
+```
+
+This needs `jq` and both Apple targets. The output lands in `dist/`.
+
+## What it does
+
+- **Chat** — streaming Markdown, reasoning, tool and shell cards, plans, permission prompts,
+  errors, retries, and completion times.
+- **Sessions** — create, search, rename, archive, delete, and switch between projects.
+- **Composer** — `@` files and folders, `/` commands, `$` skills, `#` snippets, pasted
+  images, and a queue while the agent is busy.
+- **Attachments** — images sent inline, HEIC converted to JPEG, and Office/ODF documents
+  unpacked into text plus embedded images.
+- **Files** — project tree, viewer, editor, find, save, and a guard for large files.
+- **Changes** — session diff and per-turn diffs with file statistics.
+- **Git** — status, stage, unstage, discard, commit, branches, log, fetch, pull, and push.
+- **Terminal** — a real PTY with tabs, colors, scrollback, alternate screen, and resize.
+- **Appearance** — light and dark theme pairs, bundled Inter, JetBrains Mono, and Instrument
+  Serif, plus density, type size, and motion controls.
+- **Command palette** — sessions, commands, and settings from `⌘K`.
+
+![RustChamber chat with session context](docs/screenshots/chat.png)
+
+## Settings and appearance
+
+![RustChamber appearance settings](docs/screenshots/settings.png)
+
+![RustChamber about window](docs/screenshots/about.png)
+
+## Connecting to OpenCode
+
+By default RustChamber starts a managed `opencode serve` process on a free loopback port with
+a random password, then connects to it. The process is stopped when the app exits.
+
+To use an existing server, open **Settings → General** and set the endpoint and password.
+The same values can be written to the settings file:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/rustchamber/settings.json` |
+| Linux | `~/.config/rustchamber/settings.json` |
+| Windows | `%APPDATA%\rustchamber\settings.json` |
+
+The endpoint password is stored in that file as plain text.
+
+Useful environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `RCHAMBER_OPENCODE_BIN` | Path to the `opencode` binary |
+| `RCHAMBER_WORKSPACE` | Workspace directory for this run |
+| `RCHAMBER_THEME` | `dark`, `light`, or `system` |
+| `RCHAMBER_SURFACE` | Open `files`, `git`, `changes`, `terminal`, or `context` |
+| `RCHAMBER_ZONE` | Dock the panel `open` (right) or `bottom` |
+| `RCHAMBER_OPEN_SESSION` | Open a session id at startup |
+| `OPENCODE_PASSWORD` | Reuse an explicit server password |
+
+Snippets are Markdown files in `~/.config/opencode/snippets` or
+`<workspace>/.opencode/snippets`. Optional frontmatter adds `aliases` and a `description`;
+`#name` in the composer expands the snippet before sending.
+
+## Keyboard
+
+| Action | macOS | Linux / Windows |
+| --- | --- | --- |
+| Command palette | `⌘K` | `Ctrl+K` |
+| New session | `⌘N` | `Ctrl+N` |
+| Previous / next session | `⌘⌥←` / `⌘⌥→` | `Ctrl+Alt+←` / `Ctrl+Alt+→` |
+| Model selector | `⌘⇧M` | `Ctrl+Shift+M` |
+| Toggle sidebar | `⌘B` | `Ctrl+B` |
+| Toggle terminal | `⌘J` | `Ctrl+J` |
+| Close tab | `⌘W` | `Ctrl+W` |
+| Save file | `⌘S` | `Ctrl+S` |
+| Settings | `⌘,` | `Ctrl+,` |
+| Close overlay | `Esc` | `Esc` |
+
+## Architecture
+
+The UI thread never performs I/O. Screens emit `Action` values to a Tokio backend actor,
+which owns the OpenCode client, the SSE stream, and the managed server process. The backend
+projects results back as `BackendEvent` values; the UI reduces them into state and repaints
+on demand.
+
+| Crate | Responsibility |
+| --- | --- |
+| `rchamber-api` | Typed OpenCode client: auth, sessions, messages, models, permissions, files, VCS, PTY, SSE |
+| `rchamber-app` | Actions, backend actor, event projection, streaming reducer, drafts, attachments, snippets |
+| `rchamber-ui` | egui shell, chat, composer, panels, settings, theming |
+| `rchamber-git` | Native git operations with timeouts and porcelain parsing |
+| `rchamber-term` | PTY session and VT emulator |
+| `rchamber` | Binary entry point |
+
+More detail is in [`docs/architecture.md`](docs/architecture.md).
+
+## Design notes
+
+The interface is immediate mode. That keeps dense, virtualized views cheap and removes the
+DOM, but it also means the app owns layout, focus, text measurement, and hit testing. The
+backend/UI split keeps network latency out of the frame loop.
+
+A webview would have been faster to ship. The goal here was a native binary with no
+JavaScript runtime, a real PTY, and direct control over how diffs and terminal cells are
+drawn.
+
+## Status
+
+macOS is the tested target. Linux and Windows compile in CI and are expected to work, but
+they have not received the same hands-on testing.
+
+Known limits:
+
+- No embedded web preview, plugin manager, or MCP configuration editor.
+- Providers, agents, commands, and skills are shown read-only, as reported by OpenCode.
+- No auto-update yet.
+- An OpenCode CLI must be installed; the app does not bundle it.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE). Third-party attribution is recorded in [`NOTICE`](NOTICE).
