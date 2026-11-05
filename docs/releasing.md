@@ -17,7 +17,7 @@ Check the staged file list before committing. `labs/` and `target/` are ignored 
 another project and is about 395 MB.
 
 ```bash
-git commit -m "RustChamber 0.0.1-alpha"
+git commit -m "RustChamber 0.1.0-beta"
 git branch -M main
 git remote add origin git@github.com:rustchamber/rustchamber.git
 git push -u origin main
@@ -39,18 +39,18 @@ For the repository page:
 The release workflow runs on any `v*` tag and on manual dispatch.
 
 ```bash
-git tag -a v0.0.1-alpha -m "RustChamber 0.0.1-alpha"
-git push origin v0.0.1-alpha
+git tag -a v0.1.0-beta -m "RustChamber 0.1.0-beta"
+git push origin v0.1.0-beta
 ```
 
 GitHub Actions builds a universal macOS binary (arm64 + x86_64), creates
 `RustChamber.app`, signs it, and publishes:
 
-- `RustChamber-0.0.1-alpha-macos-universal.dmg`
-- `RustChamber-0.0.1-alpha-macos-universal.zip`
+- `RustChamber-0.1.0-beta-macos-universal.dmg`
+- `RustChamber-0.1.0-beta-macos-universal.zip`
 
 The DMG contains the app and an Applications shortcut. The ZIP is there for users who
-prefer it. Versions with a prerelease suffix, such as `0.0.1-alpha`, are published as a
+prefer it. Versions with a prerelease suffix, such as `0.1.0-beta`, are published as a
 GitHub prerelease automatically.
 
 Before tagging, bump the workspace version in `Cargo.toml` and add the matching section to
@@ -74,7 +74,7 @@ Settings → Deploy keys, and storing the private half in the secret.
 To update the cask without cutting a new release, run the workflow manually:
 
 ```bash
-gh workflow run homebrew.yml -f version=0.0.1-alpha
+gh workflow run homebrew.yml -f version=0.1.0-beta
 ```
 
 The cask runs a `postflight_steps` step that removes `com.apple.quarantine` from the

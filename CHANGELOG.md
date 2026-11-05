@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta
+
+First beta release. The alpha and beta share the same feature set; this version marks the
+first build we consider ready for daily use.
+
+- The settings window now paints above the composer, so the input no longer covers the dialog.
+- README screenshots refreshed in the RustChamber light theme, with a new git panel shot.
+
 ## 0.0.2-alpha
 
 - The settings window now paints above the composer, so the input no longer covers the dialog.
