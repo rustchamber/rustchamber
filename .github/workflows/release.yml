@@ -69,20 +69,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          retry() {
+            local attempt=1 max=5 status
+            until "$@"; do
+              status=$?
+              if (( attempt >= max )); then
+                echo "::error::$(printf '%q ' "$@") failed after $max attempts" >&2
+                return $status
+              fi
+              echo "Attempt $attempt failed; retrying in $(( attempt * 5 ))s" >&2
+              sleep $(( attempt * 5 ))
+              attempt=$(( attempt + 1 ))
+            done
+          }
+
           prerelease=()
           if [[ "$VERSION" == *-* ]]; then
             prerelease=(--prerelease)
           fi
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip --clobber
-            if (( ${#prerelease[@]} )); then
-              gh release edit "$GITHUB_REF_NAME" "${prerelease[@]}"
-            fi
-          else
-            gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip \
-              --title "RustChamber $VERSION" --generate-notes "${prerelease[@]}"
+          # Create as a draft so a transient API failure never leaves a
+          # half-published release behind, then upload and publish.
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            retry gh release create "$GITHUB_REF_NAME" \
+              --title "RustChamber $VERSION" --generate-notes --draft
           fi
+
+          retry gh release upload "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip --clobber
+          retry gh release edit "$GITHUB_REF_NAME" --draft=false ${prerelease[@]+"${prerelease[@]}"}
+
+          gh release view "$GITHUB_REF_NAME" \
+            --json tagName,isDraft,isPrerelease,assets \
+            --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease,
+                   assets: [.assets[].name]}'
 
   homebrew:
     needs: macos
