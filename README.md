@@ -22,7 +22,9 @@ brew install --cask LipeMachado/tap/rustchamber
 ```
 
 The cask installs the universal build and clears the macOS quarantine flag, so the app
-opens without the "Apple could not verify" dialog. Upgrade with
+opens without the "Apple could not verify" dialog. If you already installed RustChamber
+from the DMG, adopt it once with
+`brew install --cask --adopt LipeMachado/tap/rustchamber`. Upgrade with
 `brew upgrade --cask rustchamber`; remove settings as well with
 `brew uninstall --zap --cask rustchamber`.
 
