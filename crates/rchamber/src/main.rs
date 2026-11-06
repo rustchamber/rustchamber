@@ -22,6 +22,7 @@ fn main() -> eframe::Result<()> {
     }
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("RustChamber")
+        .with_icon(rchamber_ui::app_icon::app_icon())
         .with_inner_size(size)
         .with_min_inner_size([900.0, 600.0])
         .with_app_id("dev.rustchamber.RustChamber");

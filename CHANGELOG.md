@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1-beta
+
+- The Dock now shows the RustChamber icon. eframe was replacing the bundle icon with its default icon at launch.
+
 ## 0.2.0-beta
 
 - In-app updates: RustChamber checks GitHub Releases at launch and every hour, shows a
