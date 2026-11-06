@@ -17,6 +17,7 @@ const FIRST_CHECK: Duration = Duration::from_secs(3);
 const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const FEED: &str = "https://api.github.com/repos/rustchamber/rustchamber/releases?per_page=20";
+const ATOM: &str = "https://github.com/rustchamber/rustchamber/releases.atom";
 const USER_AGENT: &str = "RustChamber";
 
 #[derive(Clone, Debug)]
@@ -224,8 +225,9 @@ impl Worker {
         self.snapshot.phase = Phase::Checking;
         self.snapshot.error = None;
         self.publish();
-        let feed = std::env::var("RCHAMBER_UPDATE_FEED").unwrap_or_else(|_| FEED.to_string());
-        match self.fetch_release(&feed).await {
+        let custom = std::env::var("RCHAMBER_UPDATE_FEED").ok();
+        let feed = custom.clone().unwrap_or_else(|| FEED.to_string());
+        match self.fetch_release(&feed, custom.is_none()).await {
             Ok(Some(release)) => {
                 let info = self.info(release);
                 tracing::info!(
@@ -233,15 +235,18 @@ impl Worker {
                     install = ?info.install,
                     "update available"
                 );
+                self.log(&format!("update available: {}", info.version));
                 self.snapshot.info = Some(info);
                 self.snapshot.phase = Phase::Available;
             }
             Ok(None) => {
+                self.log("up to date");
                 self.snapshot.info = None;
                 self.snapshot.phase = Phase::Idle;
             }
             Err(error) => {
                 tracing::warn!("update check failed: {error}");
+                self.log(&format!("update check failed: {error}"));
                 self.snapshot.phase = if self.snapshot.info.is_some() {
                     Phase::Available
                 } else {
@@ -253,7 +258,29 @@ impl Worker {
         self.publish();
     }
 
-    async fn fetch_release(&self, feed: &str) -> Result<Option<github::Release>, String> {
+    async fn fetch_release(
+        &self,
+        feed: &str,
+        allow_atom: bool,
+    ) -> Result<Option<github::Release>, String> {
+        match self.fetch_json(feed).await {
+            Ok(release) => Ok(release),
+            Err(error) if allow_atom => {
+                tracing::warn!(
+                    "GitHub API update check failed, falling back to the release feed: {error}"
+                );
+                match self.fetch_atom().await {
+                    Ok(release) => Ok(release),
+                    Err(atom_error) => Err(format!(
+                        "{error} The release feed also failed: {atom_error}"
+                    )),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn fetch_json(&self, feed: &str) -> Result<Option<github::Release>, String> {
         let response = self
             .client
             .get(feed)
@@ -274,6 +301,44 @@ impl Worker {
             .map_err(|error| format!("Could not read the update feed: {error}"))?;
         let releases = github::parse_releases(&body)?;
         Ok(github::pick_release(&releases, &self.current))
+    }
+
+    async fn fetch_atom(&self) -> Result<Option<github::Release>, String> {
+        let response = self
+            .client
+            .get(ATOM)
+            .header(reqwest::header::ACCEPT, "application/atom+xml")
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .send()
+            .await
+            .map_err(|error| format!("Could not reach the release feed: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The release feed answered {}.",
+                response.status().as_u16()
+            ));
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("Could not read the release feed: {error}"))?;
+        let releases = github::parse_atom(&body)?;
+        Ok(github::pick_release(&releases, &self.current))
+    }
+
+    fn log(&self, message: &str) {
+        use std::io::Write as _;
+        let path = install::cache_dir().join("update.log");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{} {message}", chrono::Utc::now().to_rfc3339());
+        }
     }
 
     fn info(&self, release: github::Release) -> UpdateInfo {

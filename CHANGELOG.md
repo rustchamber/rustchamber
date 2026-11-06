@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2-beta
+
+- The update check now falls back to the GitHub releases Atom feed when the API is rate-limited, so the sidebar arrow still appears.
+- Every check writes its result to `~/Library/Caches/rustchamber/updates/update.log`.
+
 ## 0.2.1-beta
 
 - The Dock now shows the RustChamber icon. eframe was replacing the bundle icon with its default icon at launch.

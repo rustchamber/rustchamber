@@ -133,6 +133,152 @@ pub fn asset_url(release: &Release) -> Option<Url> {
         .and_then(|asset| Url::parse(&asset.browser_download_url).ok())
 }
 
+pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
+    let mut releases = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("<entry>") {
+        rest = &rest[start + "<entry>".len()..];
+        let Some(end) = rest.find("</entry>") else {
+            break;
+        };
+        let entry = &rest[..end];
+        rest = &rest[end + "</entry>".len()..];
+        let Some(link) = release_link(entry) else {
+            continue;
+        };
+        let Some(tag) = link.rsplit('/').next().filter(|tag| tag.starts_with('v')) else {
+            continue;
+        };
+        let Some(version) = parse_tag(tag) else {
+            continue;
+        };
+        let title = find_text(entry, "title")
+            .map(|title| decode_entities(&title))
+            .filter(|title| !title.trim().is_empty());
+        let updated = find_text(entry, "updated").map(|value| decode_entities(&value));
+        let notes = find_text(entry, "content")
+            .map(|content| html_to_text(&content))
+            .filter(|notes| !notes.trim().is_empty());
+        let asset_name = format!("RustChamber-{version}-macos-universal.zip");
+        let download_url = format!("{RELEASES_URL}/download/{tag}/{asset_name}");
+        releases.push(Release {
+            tag_name: tag.to_string(),
+            name: title,
+            body: notes,
+            html_url: link,
+            draft: false,
+            prerelease: !version.pre.is_empty(),
+            published_at: updated,
+            assets: vec![Asset {
+                name: asset_name,
+                browser_download_url: download_url,
+                size: 0,
+                digest: None,
+            }],
+        });
+    }
+    if releases.is_empty() {
+        Err("The release feed has no entries.".into())
+    } else {
+        Ok(releases)
+    }
+}
+
+fn release_link(entry: &str) -> Option<String> {
+    let mut rest = entry;
+    while let Some(start) = rest.find("<link") {
+        let after = &rest[start..];
+        let end = after.find('>')?;
+        let tag = &after[..end];
+        if let Some(href) = attr(tag, "href")
+            && href.contains("/releases/tag/")
+        {
+            return Some(decode_entities(&href));
+        }
+        rest = &after[end + 1..];
+    }
+    None
+}
+
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')?;
+    Some(tag[start..start + end].to_string())
+}
+
+fn find_text(entry: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}");
+    let start = entry.find(&open)?;
+    let after = &entry[start..];
+    let gt = after.find('>')?;
+    let inner = start + gt + 1;
+    let close = format!("</{name}>");
+    let end = entry[inner..].find(&close)?;
+    Some(entry[inner..inner + end].to_string())
+}
+
+fn decode_entities(value: &str) -> String {
+    value
+        .replace("<![CDATA[", "")
+        .replace("]]>", "")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&")
+}
+
+fn html_to_text(raw: &str) -> String {
+    let decoded = decode_entities(raw);
+    let mut text = decoded
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("<li>", "- ");
+    for tag in [
+        "</p>",
+        "</li>",
+        "</ul>",
+        "</ol>",
+        "</h1>",
+        "</h2>",
+        "</h3>",
+        "</h4>",
+        "</blockquote>",
+        "</div>",
+    ] {
+        text = text.replace(tag, "\n");
+    }
+    let mut stripped = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for character in text.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => stripped.push(character),
+            _ => {}
+        }
+    }
+    let mut result = String::new();
+    let mut blank = 0;
+    for line in stripped.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            blank += 1;
+            if blank > 1 {
+                continue;
+            }
+        } else {
+            blank = 0;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +385,40 @@ mod tests {
         release.body = Some("  ".into());
         release.name = Some("RustChamber 0.2.0".into());
         assert_eq!(release.notes(), "RustChamber 0.2.0");
+    }
+
+    #[test]
+    fn parses_the_atom_feed_as_a_fallback() {
+        let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+<entry>
+  <updated>2026-11-06T12:17:12Z</updated>
+  <link rel="alternate" type="text/html" href="https://github.com/rustchamber/rustchamber/releases/tag/v0.2.1-beta"/>
+  <title>RustChamber 0.2.1-beta</title>
+  <content type="html">&lt;p&gt;Dock icon fix&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Set the icon at runtime&lt;/li&gt;&lt;/ul&gt;</content>
+</entry>
+<entry>
+  <updated>2026-11-05T15:00:00Z</updated>
+  <link rel="alternate" type="text/html" href="https://github.com/rustchamber/rustchamber/releases/tag/v0.2.0-beta"/>
+  <title>RustChamber 0.2.0-beta</title>
+  <content type="html">&lt;p&gt;In-app updates&lt;/p&gt;</content>
+</entry>
+</feed>"#;
+        let releases = parse_atom(atom).unwrap();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].tag_name, "v0.2.1-beta");
+        assert!(releases[0].notes().contains("Dock icon fix"));
+        assert!(releases[0].notes().contains("- Set the icon at runtime"));
+        assert_eq!(releases[0].download_size(), None);
+        assert_eq!(
+            releases[0].macos_zip().unwrap().browser_download_url,
+            "https://github.com/rustchamber/rustchamber/releases/download/v0.2.1-beta/RustChamber-0.2.1-beta-macos-universal.zip"
+        );
+        let current = semver::Version::parse("0.2.0-beta").unwrap();
+        assert_eq!(
+            pick_release(&releases, &current)
+                .and_then(|release| release.version())
+                .map(|version| version.to_string()),
+            Some("0.2.1-beta".into())
+        );
     }
 }
