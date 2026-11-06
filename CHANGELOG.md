@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta
 
 - In-app updates: RustChamber checks GitHub Releases at launch and every hour, shows a
   blue download arrow in the sidebar, opens the release notes, downloads in the background,
