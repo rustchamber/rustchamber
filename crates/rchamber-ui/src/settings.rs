@@ -941,6 +941,7 @@ fn nav_row(ui: &mut Ui, p: &Palette, page: &Page, active: bool) -> egui::Respons
         Vec2::new(ui.available_width(), NAV_ROW_HEIGHT),
         Sense::click(),
     );
+    crate::widgets::pointer(ui, &response);
     let pressed = response.is_pointer_button_down_on();
     let fill = if active {
         p.selection
@@ -997,6 +998,7 @@ fn search_row(ui: &mut Ui, p: &Palette, page: &Page, active: bool) -> egui::Resp
     };
     let height = 12.0 + theme::LINE_LABEL + description_height;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    crate::widgets::pointer(ui, &response);
     let fill = if active {
         p.selection
     } else if response.hovered() {
@@ -1528,6 +1530,7 @@ fn list_row(
     };
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    crate::widgets::pointer(ui, &response);
     if selected {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.selection);
@@ -2946,6 +2949,7 @@ fn text_link(ui: &mut Ui, p: &Palette, label: &str, url: &str, icon: Icon) {
         .layout_no_wrap(label.to_string(), font, p.fg_muted);
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(galley.size().x + 22.0, 20.0), Sense::click());
+    crate::widgets::pointer(ui, &response);
     let color = if response.hovered() { p.fg } else { p.fg_muted };
     icons::paint(
         ui,

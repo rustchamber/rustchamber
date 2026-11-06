@@ -478,6 +478,7 @@ fn empty_state(ui: &mut Ui, p: &Palette) {
 fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), ITEM_HEIGHT), Sense::click());
+    crate::widgets::pointer(ui, &response);
     let row = Rect::from_min_max(
         Pos2::new(rect.left() + GROUP_PAD_X, rect.top()),
         Pos2::new(rect.right() - GROUP_PAD_X, rect.bottom()),
@@ -833,7 +834,7 @@ fn project_entries(app: &RustChamber, needle: &str) -> Group {
 
 fn execute(app: &mut RustChamber, command: Command, ctx: &egui::Context) {
     match command {
-        Command::NewSession => app.create_session(None),
+        Command::NewSession => app.begin_new_session(None),
         Command::Settings => app.open_settings(),
         Command::SettingsPage(index) => {
             settings::open_page(ctx, index);

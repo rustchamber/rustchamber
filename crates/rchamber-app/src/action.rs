@@ -6,9 +6,14 @@ use rchamber_api::models::{
 };
 
 #[derive(Clone, Debug)]
+pub struct TrackedProject {
+    pub directory: String,
+    pub since: f64,
+}
+
+#[derive(Clone, Debug)]
 pub enum Action {
-    RefreshSessions,
-    SearchSessions(String),
+    SetTrackedProjects(Vec<TrackedProject>),
     SelectSession(String),
     CreateSession {
         directory: String,
@@ -16,6 +21,7 @@ pub enum Action {
         files: Vec<PromptFile>,
         model: Option<ModelRef>,
         agent: Option<String>,
+        allow_all: bool,
     },
     Send {
         session_id: String,
@@ -47,6 +53,33 @@ pub enum Action {
         id: String,
         archived: bool,
     },
+    SetSessionPinned {
+        id: String,
+        pinned: bool,
+    },
+    SetSessionWork {
+        id: String,
+        work: bool,
+    },
+    SetSessionPermissions {
+        id: String,
+        allow_all: bool,
+    },
+    MarkSessionViewed(String),
+    MarkAllSessionsViewed(Vec<String>),
+    MoveSession {
+        id: String,
+        directory: String,
+    },
+    AddProject {
+        directory: String,
+        name: Option<String>,
+    },
+    ArchiveSessions {
+        ids: Vec<String>,
+        archived: bool,
+    },
+    DeleteSessions(Vec<String>),
     SwitchModel {
         session_id: String,
         model: ModelRef,
@@ -62,6 +95,7 @@ pub enum Action {
     },
     SetWorkspace(String),
     LoadOlder(String),
+    LoadSessionPreview(String),
     LoadDiff(String),
     LoadDirectory(String),
     LoadFile(String),
@@ -98,6 +132,19 @@ pub enum BackendEvent {
     Agents(Vec<rchamber_api::models::Agent>),
     Commands(Vec<rchamber_api::models::Command>),
     Projects(Vec<Project>),
+    SessionMetadataUpdated(Box<Session>),
+    SessionViewed {
+        id: String,
+        idle: f64,
+    },
+    SessionPreview {
+        id: String,
+        text: String,
+    },
+    ProjectAdded {
+        directory: String,
+        name: Option<String>,
+    },
     Permissions {
         session_id: String,
         requests: Vec<PermissionRequest>,
@@ -164,6 +211,10 @@ pub enum LiveEvent {
     },
     SessionDeleted {
         session_id: String,
+    },
+    SessionViewed {
+        session_id: String,
+        idle: f64,
     },
     SessionModel {
         session_id: String,

@@ -1,14 +1,13 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Galley, Id, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, StrokeKind, Ui, Vec2,
+    Sense, Stroke, StrokeKind, TextStyle, Ui, Vec2, WidgetText,
 };
 use rchamber_app::{Action, Connection};
 
-use crate::app::RustChamber;
+use crate::app::{CHATS_TARGET, RustChamber, menu_nav_focus, menu_popup};
 use crate::composer;
 use crate::icons::{self, Icon};
 use crate::logo;
@@ -59,6 +58,9 @@ const EMPTY_TITLE: f32 = 14.0;
 const EMPTY_MESSAGE: f32 = 13.5;
 
 const SUBMIT_GUARD: f64 = 0.6;
+const TARGET_HEIGHT: f32 = 30.0;
+const TARGET_GAP: f32 = 8.0;
+const TARGET_MENU_WIDTH: f32 = 276.0;
 
 #[derive(Clone, Debug)]
 struct Starter {
@@ -226,7 +228,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let starters = starter_set(app);
     let column = column_width(area.width());
     let layout = chip_layout(ui, &starters, column);
-    let project = workspace_label(app);
+    let project = target_label(app);
     let heading = prepare_heading(
         ui,
         project.as_deref(),
@@ -235,10 +237,15 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         &p,
     );
     let composer_height = composer::reserved_height(ui.ctx(), "home", true).max(96.0);
-    let block =
-        heading.height() + HEADING_MARGIN + composer_height + CHIPS_MARGIN_TOP + layout.height();
+    let block = heading.height()
+        + HEADING_MARGIN
+        + TARGET_HEIGHT
+        + TARGET_GAP
+        + composer_height
+        + CHIPS_MARGIN_TOP
+        + layout.height();
     let block_top = area.top() + ((area.height() - block) * 0.5).max(24.0);
-    let composer_top = block_top + heading.height() + HEADING_MARGIN;
+    let composer_top = block_top + heading.height() + HEADING_MARGIN + TARGET_HEIGHT + TARGET_GAP;
     let bounds = Rect::from_min_max(
         area.min,
         Pos2::new(
@@ -254,7 +261,17 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         .unwrap_or_else(|| Rect::from_center_size(area.center(), Vec2::new(column, 0.0)));
     let center_x = composer_rect.center().x;
 
-    let top = (composer_rect.top() - HEADING_MARGIN - heading.height()).max(area.top());
+    let selector_top = composer_rect.top() - TARGET_GAP - TARGET_HEIGHT;
+    target_selector(
+        ui,
+        app,
+        &p,
+        composer_rect.left(),
+        selector_top,
+        column.min(TARGET_MENU_WIDTH),
+    );
+
+    let top = (selector_top - HEADING_MARGIN - heading.height()).max(area.top());
     heading.paint(ui, &p, center_x, top);
 
     let chips_rect = Rect::from_min_size(
@@ -385,16 +402,165 @@ fn unpin_starter(app: &mut RustChamber, pin: &str) {
     app.settings.save();
 }
 
-fn workspace_label(app: &RustChamber) -> Option<String> {
-    let path = app.model.workspace.as_deref()?.trim();
-    if path.is_empty() {
+fn target_label(app: &RustChamber) -> Option<String> {
+    let target = app.ui.home_project.as_deref()?;
+    if target == CHATS_TARGET {
         return None;
     }
-    let name = Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.is_empty());
-    Some(name.unwrap_or_else(|| path.to_string()))
+    app.model
+        .project_by_id(target)
+        .map(|project| project.display_name().to_string())
+}
+
+fn target_selector(
+    ui: &mut Ui,
+    app: &mut RustChamber,
+    p: &Palette,
+    left: f32,
+    top: f32,
+    max_width: f32,
+) {
+    let selected = app
+        .ui
+        .home_project
+        .clone()
+        .unwrap_or_else(|| CHATS_TARGET.to_string());
+    let project = app.model.project_by_id(&selected).cloned();
+    let (icon, label, tint) = match &project {
+        Some(project) => (Icon::Folder, project.display_name().to_string(), p.fg_muted),
+        None => (Icon::MessageSquare, "Chat".to_string(), p.fg_muted),
+    };
+    let label_max = (max_width - 61.0).max(24.0);
+    let galley = WidgetText::from(
+        RichText::new(label)
+            .font(theme::font_medium(theme::TEXT_UI_LABEL))
+            .color(p.fg),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        label_max,
+        TextStyle::Body,
+    );
+    let width = (10.0 + 14.0 + 8.0 + galley.size().x + 7.0 + 12.0 + 10.0).min(max_width);
+    let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, TARGET_HEIGHT));
+    let response = ui.interact(
+        rect,
+        egui::Id::unique("home-target-selector"),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &response);
+    let hovered = crate::app::hover_amount(ui.ctx(), response.id.with("hover"), response.hovered());
+    if hovered > 0.0 || app.ui.home_project_menu {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::MD),
+            p.scale_alpha(
+                p.hover,
+                0.6 * hovered.max(if app.ui.home_project_menu { 0.6 } else { 0.0 }),
+            ),
+        );
+    }
+    icons::paint(
+        ui,
+        icon,
+        Rect::from_center_size(
+            Pos2::new(rect.left() + 10.0 + 7.0, rect.center().y),
+            Vec2::splat(14.0),
+        ),
+        tint,
+    );
+    let label_left = rect.left() + 10.0 + 14.0 + 8.0;
+    ui.painter().galley(
+        Pos2::new(label_left, rect.center().y - galley.size().y * 0.5),
+        galley.clone(),
+        p.fg,
+    );
+    icons::paint(
+        ui,
+        Icon::ChevronDown,
+        Rect::from_center_size(
+            Pos2::new(label_left + galley.size().x + 7.0 + 6.0, rect.center().y),
+            Vec2::splat(12.0),
+        ),
+        p.fg_muted,
+    );
+
+    let projects: Vec<rchamber_app::ProjectEntry> = app
+        .model
+        .workspace_projects()
+        .into_iter()
+        .cloned()
+        .collect();
+    let id = egui::Id::unique("home-target-picker");
+    let mut open = app.ui.home_project_menu;
+    let mut chosen: Option<String> = None;
+    let mut items: Vec<egui::Response> = Vec::new();
+    menu_popup(ui.ctx(), &response, id, &mut open, p, 6.0, |ui, _| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.set_width(TARGET_MENU_WIDTH);
+        let mut query = app.ui.home_project_query.clone();
+        crate::widgets::search_field(
+            ui,
+            &mut query,
+            "Search projects…",
+            p,
+            egui::Id::unique("home-target-search"),
+        );
+        app.ui.home_project_query = query.clone();
+        ui.add_space(4.0);
+        let needle = query.trim().to_lowercase();
+        let chat = crate::widgets::menu_item_ex(
+            ui,
+            "Chat",
+            Some(Icon::MessageSquare),
+            None,
+            selected == CHATS_TARGET,
+            true,
+            p,
+        );
+        if chat.clicked() {
+            chosen = Some(CHATS_TARGET.to_string());
+        }
+        items.push(chat);
+        for project in &projects {
+            if !needle.is_empty() && !project.display_name().to_lowercase().contains(&needle) {
+                continue;
+            }
+            let item = crate::widgets::menu_item_ex(
+                ui,
+                project.display_name(),
+                Some(Icon::Folder),
+                None,
+                selected == project.id,
+                true,
+                p,
+            );
+            if item.clicked() {
+                chosen = Some(project.id.clone());
+            }
+            items.push(item);
+        }
+        if projects.is_empty() {
+            ui.label(
+                RichText::new("No projects yet")
+                    .font(theme::font(theme::TEXT_MICRO))
+                    .color(p.fg_muted),
+            );
+        }
+    });
+    menu_nav_focus(ui.ctx(), id, open, &items);
+    if response.clicked() {
+        app.ui.home_project_menu = !app.ui.home_project_menu;
+        if app.ui.home_project_menu {
+            app.ui.home_project_query.clear();
+        }
+    } else if !open {
+        app.ui.home_project_menu = false;
+    }
+    if let Some(target) = chosen {
+        app.switch_home_target(target);
+    }
 }
 
 fn heading_text(project: Option<&str>) -> String {
@@ -910,13 +1076,25 @@ fn submit(ui: &Ui, app: &mut RustChamber, text: &str, skill: bool) {
     let model = composer::current_model(app);
     let agent = composer::current_agent(app);
     let files = app.model.attachments_for("home");
+    let directory = app.home_target_directory();
+    if let Some(target) = app.ui.home_project.clone()
+        && target != CHATS_TARGET
+    {
+        app.model.workspace_store.mark_active_project(&target);
+        app.model.workspace_store.save();
+    }
     app.backend.send(Action::CreateSession {
-        directory: app.workspace_directory(),
+        directory,
         prompt: Some(prompt),
         files,
         model,
         agent,
+        allow_all: app.ui.home_allow_all,
     });
+    if let Some(target) = app.ui.home_project.clone() {
+        app.model.workspace_store.new_session_drafts.remove(&target);
+        app.model.workspace_store.save();
+    }
     app.ui.home_draft.clear();
     app.model.clear_attachments("home");
     app.model.save_draft();

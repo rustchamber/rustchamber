@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+pub mod add_project;
 pub mod app;
 pub mod app_icon;
 pub mod changes;

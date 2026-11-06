@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +11,6 @@ use rchamber_app::{Action, AppModel, Backend, BackendEvent, LaunchConfig, ToastK
 
 use crate::changes;
 use crate::chat;
-use crate::composer;
 use crate::context_panel;
 use crate::home;
 use crate::icons::{self, Icon};
@@ -49,6 +48,8 @@ const TOAST_PAD_Y: i8 = 12;
 const TOAST_EXIT_SECONDS: f32 = 0.110;
 const SHELL_MS: f32 = crate::motion::COLUMN;
 const HOVER_MS: f32 = crate::motion::HOVER;
+
+pub const CHATS_TARGET: &str = "chats";
 
 pub(crate) fn ease_shell(t: f32) -> f32 {
     crate::motion::ease_standard(t)
@@ -323,7 +324,6 @@ pub struct UiState {
     pub palette_open: bool,
     pub palette_query: String,
     pub palette_index: usize,
-    pub workspace_menu: bool,
     pub model_menu: bool,
     pub agent_menu: bool,
     pub header_menu: bool,
@@ -334,18 +334,45 @@ pub struct UiState {
     pub home_model: Option<ModelRef>,
     pub home_agent: Option<String>,
     pub home_draft: String,
+    pub home_project: Option<String>,
+    pub home_project_menu: bool,
+    pub home_project_query: String,
+    pub home_allow_all: bool,
     pub focus_home_composer: bool,
     pub settings_endpoint: String,
     pub settings_password: String,
     pub search_open: bool,
     pub session_search: String,
-    pub detailed_rows: bool,
     pub sidebar_menu: bool,
     pub more_menu: bool,
     pub attach_menu: bool,
     pub focus_search: bool,
-    pub sidebar_projects_closed: bool,
-    pub sidebar_chats_closed: bool,
+    pub show_all_projects: HashSet<String>,
+    pub in_progress_show_all: bool,
+    pub chats_show_all: bool,
+    pub timeline_show_all: bool,
+    pub search_show_all: bool,
+    pub project_menu: Option<String>,
+    pub project_picker_open: bool,
+    pub project_picker_query: String,
+    pub select_mode: bool,
+    pub selected_sessions: HashSet<String>,
+    pub archive_open: bool,
+    pub customize_sections: bool,
+    pub confirm_delete: Option<String>,
+    pub confirm_delete_bulk: Vec<String>,
+    pub confirm_archive_all: Option<String>,
+    pub confirm_close_project: Option<String>,
+    pub project_rename: Option<(String, String)>,
+    pub new_folder: Option<String>,
+    pub new_folder_name: String,
+    pub folder_rename: Option<(String, String)>,
+    pub confirm_delete_folder: Option<String>,
+    pub folder_menu: Option<String>,
+    pub move_to_folder: Option<String>,
+    pub move_folder_name: String,
+    pub show_all_folders: HashSet<String>,
+    pub add_project: crate::add_project::State,
 }
 
 pub struct RustChamber {
@@ -453,9 +480,50 @@ impl RustChamber {
                 settings::open_page(&cc.egui_ctx, page);
             }
         }
+        let initial_target = model
+            .workspace_store
+            .active_project_id
+            .clone()
+            .filter(|id| model.project_by_id(id).is_some())
+            .or_else(|| {
+                model
+                    .workspace_projects()
+                    .first()
+                    .map(|project| project.id.clone())
+            })
+            .unwrap_or_else(|| CHATS_TARGET.to_string());
+        ui.home_draft = model
+            .workspace_store
+            .new_session_drafts
+            .get(&initial_target)
+            .cloned()
+            .unwrap_or_default();
+        ui.home_project = Some(initial_target);
+        ui.home_allow_all = model.workspace_store.allow_all_new_sessions;
         if std::env::var("RCHAMBER_OPEN_SEARCH").is_ok() {
             ui.search_open = true;
             ui.focus_search = true;
+        }
+        if std::env::var("RCHAMBER_OPEN_ADD_PROJECT").is_ok() {
+            ui.add_project
+                .begin(workspace.as_deref(), &model.workspace_store.projects);
+        }
+        if let Ok(panel) = std::env::var("RCHAMBER_OPEN_ADD_PROJECT") {
+            let projects = model
+                .workspace_projects()
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            ui.add_project.begin(workspace.as_deref(), &projects);
+            ui.add_project.tab = match panel.as_str() {
+                "clone" => crate::add_project::Tab::Clone,
+                "projects" => crate::add_project::Tab::Projects,
+                "opencode" => crate::add_project::Tab::OpenCode,
+                _ => crate::add_project::Tab::Home,
+            };
+            if ui.add_project.tab == crate::add_project::Tab::Clone {
+                ui.add_project.focus_clone = true;
+            }
         }
         ui.settings_endpoint = settings.endpoint.clone().unwrap_or_default();
         ui.settings_password = settings.password.clone().unwrap_or_default();
@@ -468,6 +536,7 @@ impl RustChamber {
             password: settings.password.clone(),
         };
         let backend = Backend::spawn(config, Arc::clone(&wake));
+        backend.send(Action::SetTrackedProjects(model.tracked_projects()));
         let updates = crate::update::UpdateCenter::new(crate::update::app_version(), wake);
 
         Self {
@@ -543,9 +612,17 @@ impl RustChamber {
     }
 
     pub fn open_session(&mut self, id: String) {
-        if self.model.active_id() == Some(id.as_str()) {
+        let already_active = self.model.active_id() == Some(id.as_str());
+        if already_active {
             return;
         }
+        self.save_home_draft();
+        let idle = self
+            .model
+            .sessions
+            .iter()
+            .find(|session| session.id == id)
+            .and_then(|session| session.time.idle);
         if let Some(session) = self
             .model
             .sessions
@@ -560,28 +637,150 @@ impl RustChamber {
             self.model.active = Some(chat);
             self.ui.show_changes = false;
         }
-        self.backend.send(Action::SelectSession(id));
+        self.backend.send(Action::SelectSession(id.clone()));
+        if let Some(idle) = idle {
+            self.model.mark_viewed_local(&id, idle);
+            self.backend.send(Action::MarkSessionViewed(id));
+        }
     }
 
-    pub fn create_session(&mut self, prompt: Option<String>) {
-        let directory = self.workspace_directory();
-        let model = composer::current_model(self);
-        let agent = composer::current_agent(self);
-        self.backend.send(Action::CreateSession {
-            directory,
-            prompt,
-            files: Vec::new(),
-            model,
-            agent,
+    pub fn set_session_pinned(&mut self, id: &str, pinned: bool) {
+        self.model.set_pinned_local(id, pinned);
+        self.backend.send(Action::SetSessionPinned {
+            id: id.to_string(),
+            pinned,
         });
     }
 
-    pub fn set_workspace(&mut self, directory: String) {
+    pub fn begin_new_session(&mut self, project: Option<String>) {
+        self.model.save_draft();
+        self.save_home_draft();
+        let target = project
+            .or_else(|| {
+                self.model.active.as_ref().and_then(|chat| {
+                    self.model
+                        .project_for_session(&chat.session)
+                        .map(|project| project.id.clone())
+                })
+            })
+            .or_else(|| {
+                self.model
+                    .workspace_store
+                    .active_project_id
+                    .clone()
+                    .filter(|id| self.model.project_by_id(id).is_some())
+            })
+            .or_else(|| self.ui.home_project.clone())
+            .or_else(|| {
+                self.model
+                    .workspace_projects()
+                    .first()
+                    .map(|project| project.id.clone())
+            })
+            .unwrap_or_else(|| CHATS_TARGET.to_string());
         self.model.clear_active();
-        self.model.workspace = Some(directory.clone());
-        self.settings.workspace = Some(directory.clone());
+        self.ui.home_project = Some(target);
+        self.ui.home_draft = self
+            .ui
+            .home_project
+            .as_ref()
+            .and_then(|target| self.model.workspace_store.new_session_drafts.get(target))
+            .cloned()
+            .unwrap_or_default();
+        self.ui.home_project_menu = false;
+        self.ui.home_project_query.clear();
+        self.ui.surface = Surface::Session;
+        self.ui.show_changes = false;
+        self.ui.header_menu = false;
+        self.ui.session_menu = None;
+        self.model.composer_focus = true;
+        self.ui.focus_home_composer = true;
+    }
+
+    pub fn save_home_draft(&mut self) {
+        let Some(target) = self.ui.home_project.clone() else {
+            return;
+        };
+        let current = self
+            .model
+            .workspace_store
+            .new_session_drafts
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        if self.ui.home_draft == current {
+            return;
+        }
+        if self.ui.home_draft.trim().is_empty() {
+            self.model
+                .workspace_store
+                .new_session_drafts
+                .remove(&target);
+        } else {
+            self.model
+                .workspace_store
+                .new_session_drafts
+                .insert(target, self.ui.home_draft.clone());
+        }
+        self.model.workspace_store.save();
+    }
+
+    pub fn switch_home_target(&mut self, target: String) {
+        if self.ui.home_project.as_deref() == Some(target.as_str()) {
+            return;
+        }
+        self.save_home_draft();
+        self.ui.home_draft = self
+            .model
+            .workspace_store
+            .new_session_drafts
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        self.ui.home_project = Some(target);
+        self.ui.home_project_menu = false;
+        self.ui.home_project_query.clear();
+        self.ui.focus_home_composer = true;
+    }
+
+    pub fn home_target_directory(&self) -> String {
+        if let Some(target) = self.ui.home_project.as_deref() {
+            if target == CHATS_TARGET {
+                if let Some(chats) = rchamber_app::WorkspaceStore::chats_directory() {
+                    return chats.to_string_lossy().to_string();
+                }
+            } else if let Some(project) = self.model.project_by_id(target) {
+                return project.canonical.clone();
+            }
+        }
+        self.workspace_directory()
+    }
+
+    pub fn sync_tracked_projects(&self) {
+        self.backend
+            .send(Action::SetTrackedProjects(self.model.tracked_projects()));
+    }
+
+    pub fn select_project(&mut self, id: &str) {
+        let Some(project) = self.model.project_by_id(id).cloned() else {
+            return;
+        };
+        let current = self.workspace_directory();
+        self.model.workspace_store.mark_active_project(id);
+        self.model.workspace_store.save();
+        self.model.workspace = Some(project.canonical.clone());
+        self.settings.workspace = Some(project.canonical.clone());
         self.settings.save();
-        self.backend.send(Action::SetWorkspace(directory));
+        if current != project.canonical {
+            self.backend.send(Action::SetWorkspace(project.canonical));
+        }
+        self.ui.show_settings = false;
+    }
+
+    pub fn set_workspace(&mut self, directory: String) {
+        let id = self.model.add_project(&directory, None);
+        self.sync_tracked_projects();
+        self.select_project(&id);
         self.ui.show_settings = false;
     }
 
@@ -603,6 +802,30 @@ impl RustChamber {
         self.ui.settings_endpoint = self.settings.endpoint.clone().unwrap_or_default();
         self.ui.settings_password = self.settings.password.clone().unwrap_or_default();
         self.ui.show_settings = true;
+    }
+
+    pub fn open_add_project(&mut self) {
+        let directory = self
+            .model
+            .workspace_store
+            .active_project_id
+            .as_ref()
+            .and_then(|id| self.model.project_by_id(id))
+            .map(|project| project.canonical.clone())
+            .or_else(|| self.model.workspace.clone())
+            .or_else(|| {
+                self.model
+                    .active
+                    .as_ref()
+                    .and_then(|chat| chat.session.directory().map(str::to_string))
+            });
+        let projects = self
+            .model
+            .workspace_projects()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        self.ui.add_project.begin(directory.as_deref(), &projects);
     }
 
     pub fn check_for_updates(&mut self) {
@@ -640,7 +863,8 @@ impl RustChamber {
         if !ctx.input(|input| input.focused) {
             self.ui.header_menu = false;
             self.ui.session_menu = None;
-            self.ui.workspace_menu = false;
+            self.ui.project_picker_open = false;
+            self.ui.project_menu = None;
             self.ui.sidebar_menu = false;
             self.ui.more_menu = false;
             self.ui.model_menu = false;
@@ -672,6 +896,11 @@ impl RustChamber {
             self.ui.surface = Surface::Terminal;
             self.ui.context_open = true;
         }
+        if ctx.input(|input| input.key_pressed(egui::Key::F) && input.modifiers.command) {
+            self.ui.sidebar_collapsed = false;
+            self.ui.search_open = true;
+            self.ui.focus_search = true;
+        }
         if ctx.input(|input| {
             input.key_pressed(egui::Key::M) && input.modifiers.command && input.modifiers.shift
         }) {
@@ -692,7 +921,7 @@ impl RustChamber {
             self.cycle_session(1);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::N) && (command || input.modifiers.ctrl)) {
-            self.create_session(None);
+            self.begin_new_session(None);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Comma) && command) {
             self.open_settings();
@@ -704,21 +933,42 @@ impl RustChamber {
             let dismissed = self.ui.show_changes
                 || self.ui.header_menu
                 || self.ui.session_menu.is_some()
-                || self.ui.workspace_menu
+                || self.ui.project_picker_open
+                || self.ui.project_menu.is_some()
                 || self.ui.sidebar_menu
                 || self.ui.more_menu
                 || self.ui.model_menu
                 || self.ui.agent_menu
-                || self.ui.attach_menu;
+                || self.ui.attach_menu
+                || self.ui.archive_open
+                || self.ui.customize_sections
+                || self.ui.select_mode
+                || self.ui.confirm_delete.is_some()
+                || !self.ui.confirm_delete_bulk.is_empty()
+                || self.ui.confirm_archive_all.is_some()
+                || self.ui.confirm_close_project.is_some()
+                || self.ui.project_rename.is_some()
+                || self.ui.add_project.open;
             self.ui.show_changes = false;
             self.ui.header_menu = false;
             self.ui.session_menu = None;
-            self.ui.workspace_menu = false;
+            self.ui.project_picker_open = false;
+            self.ui.project_menu = None;
             self.ui.sidebar_menu = false;
             self.ui.more_menu = false;
             self.ui.model_menu = false;
             self.ui.agent_menu = false;
             self.ui.attach_menu = false;
+            self.ui.archive_open = false;
+            self.ui.customize_sections = false;
+            self.ui.select_mode = false;
+            self.ui.selected_sessions.clear();
+            self.ui.confirm_delete = None;
+            self.ui.confirm_delete_bulk.clear();
+            self.ui.confirm_archive_all = None;
+            self.ui.confirm_close_project = None;
+            self.ui.project_rename = None;
+            self.ui.add_project.open = false;
             if !dismissed {
                 self.ui.expanded = false;
             }
@@ -1060,6 +1310,8 @@ impl eframe::App for RustChamber {
 
     fn on_exit(&mut self) {
         self.model.save_draft();
+        self.save_home_draft();
+        self.model.workspace_store.save();
         crate::persist::save_drafts(&self.model.drafts);
         self.backend.send(Action::Shutdown);
         std::thread::sleep(Duration::from_millis(120));
@@ -1513,6 +1765,7 @@ impl eframe::App for RustChamber {
         }
         crate::update::show(&ctx, self);
         self.rename_dialog(&ctx);
+        crate::add_project::show(&ctx, self);
         self.toasts(&ctx, layout.rail);
 
         self.frames += 1;

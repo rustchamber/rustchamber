@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- A fresh install starts with no projects. Add a project by folder, clone a repository, or
+  import one from OpenCode; only sessions created after that are loaded.
+- New sessions open a centered composer with a project/Chat selector and per-project drafts.
+- Sessions stay in "In progress" after a turn ends until you mark them done. Running rows
+  show a slow spinner and an elapsed counter, and hovering reveals mark-done, archive, and
+  shift-to-delete actions.
+- The composer shield switches the session between ask-always and allow-all permissions.
+- Session tabs were replaced by the session title and project subtitle in the header, with a
+  full session action menu.
+- Fixed switching a model to the default effort, which sent `variant: null` and failed with
+  HTTP 400.
+- Added pointer cursors to menu rows, settings navigation, palette entries, and other
+  buttons that were missing them.
+
 ## 0.2.4-beta
 
 - The update button now also shows the current percentage while downloading or installing.

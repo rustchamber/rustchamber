@@ -25,8 +25,6 @@ pub struct Settings {
     pub reduce_motion: bool,
     #[serde(default)]
     pub accent: Option<String>,
-    #[serde(default = "default_true")]
-    pub show_hints: bool,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
     #[serde(default = "default_zone_width")]
@@ -45,10 +43,6 @@ fn default_theme() -> ThemeMode {
 
 fn default_scale() -> f32 {
     1.0
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_sidebar_width() -> f32 {
@@ -75,7 +69,6 @@ impl Default for Settings {
             compact_density: false,
             reduce_motion: false,
             accent: None,
-            show_hints: true,
             sidebar_width: 280.0,
             zone_width: 640.0,
             bottom_height: 320.0,
@@ -133,8 +126,17 @@ impl Settings {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, text);
+            let _ = std::fs::write(&path, text);
+            private_file(&path);
         }
+    }
+}
+
+fn private_file(path: &PathBuf) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
 }
 
@@ -171,7 +173,8 @@ pub fn save_drafts(drafts: &std::collections::HashMap<String, String>) {
         drafts: drafts.clone(),
     };
     if let Ok(text) = serde_json::to_string_pretty(&store) {
-        let _ = std::fs::write(path, text);
+        let _ = std::fs::write(&path, text);
+        private_file(&path);
     }
 }
 

@@ -9,7 +9,8 @@ A native desktop workspace for [OpenCode](https://opencode.ai), written in Rust 
 
 RustChamber talks to the OpenCode server directly over HTTP and Server-Sent Events. Chat,
 terminal, files, changes, and git live in the same window, with a keyboard-first interface
-built for long sessions.
+built for long sessions. Projects are explicit: a fresh install starts empty, and only the
+projects and sessions you create from RustChamber are shown.
 
 [rustchamber.lipecode.com](https://rustchamber.lipecode.com) — download, support, and roadmap.
 
@@ -91,11 +92,16 @@ This needs `jq` and both Apple targets. The output lands in `dist/`.
 
 - **Chat** — streaming Markdown, reasoning, tool and shell cards, plans, permission prompts,
   errors, retries, and completion times.
-- **Sessions** — create, search, rename, archive, delete, and switch between projects.
-- **Composer** — `@` files and folders, `/` commands, `$` skills, `#` snippets, pasted
-  images, and a queue while the agent is busy.
-- **Attachments** — images sent inline, HEIC converted to JPEG, and Office/ODF documents
-  unpacked into text plus embedded images.
+- **Projects** — a local project registry with an add-project modal, folder browsing,
+  repository clone, and import from OpenCode. Closing a project keeps its sessions.
+- **Sessions** — project-scoped lists, a centered new-session composer with a project or
+  Chat target, in-progress tracking, mark done, pin, folders, search, archive, and delete.
+- **Permissions** — a per-session shield that switches between asking for every tool and
+  allowing everything. New sessions start on the safer ask mode.
+- **Composer** — project targeting, `@` files, `/` commands, `$` skills, `#` snippets,
+  pasted images, and a queue while the agent is busy.
+- **Attachments** — files, images sent inline, HEIC converted to JPEG, and Office/ODF
+  documents unpacked into text plus embedded images.
 - **Files** — project tree, viewer, editor, find, save, and a guard for large files.
 - **Changes** — session diff and per-turn diffs with file statistics.
 - **Git** — status, stage, unstage, discard, commit, branches, log, fetch, pull, and push.
@@ -129,6 +135,28 @@ The same values can be written to the settings file:
 | Windows | `%APPDATA%\rustchamber\settings.json` |
 
 The endpoint password is stored in that file as plain text.
+
+### Workspace data
+
+Project selection, folders, display preferences, new-session drafts, and the last active
+project live in a separate workspace file:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/rustchamber/workspace.json` |
+| Linux | `~/.config/rustchamber/workspace.json` |
+| Windows | `%APPDATA%\rustchamber\workspace.json` |
+
+Writes are atomic. Remove the file while RustChamber is closed to start again with no
+projects. Sessions themselves remain in OpenCode; RustChamber only shows sessions created
+after a project was added with the current installation.
+
+### Permission modes
+
+The shield in the composer toggles the active session between **ask always** and
+**allow all**. The choice is written to OpenCode's session permission rules, so it survives
+restarts and is visible to other clients. A new session inherits the last mode chosen in the
+new-session composer; the default is ask.
 
 Useful environment variables:
 
@@ -172,7 +200,7 @@ on demand.
 | Crate | Responsibility |
 | --- | --- |
 | `rchamber-api` | Typed OpenCode client: auth, sessions, messages, models, permissions, files, VCS, PTY, SSE |
-| `rchamber-app` | Actions, backend actor, event projection, streaming reducer, drafts, attachments, snippets |
+| `rchamber-app` | Actions, backend actor, event projection, streaming reducer, project/session store, drafts, attachments, snippets |
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theming |
 | `rchamber-git` | Native git operations with timeouts and porcelain parsing |
 | `rchamber-term` | PTY session and VT emulator |
@@ -200,6 +228,8 @@ Known limits:
 
 - No embedded web preview, plugin manager, or MCP configuration editor.
 - Providers, agents, commands, and skills are shown read-only, as reported by OpenCode.
+- AI session renaming, Mini Chat, and worktree moves are visible in menus but disabled
+  until their backends exist.
 - Linux and Windows builds check for updates but open the release page instead of installing.
 - An OpenCode CLI must be installed; the app does not bundle it.
 

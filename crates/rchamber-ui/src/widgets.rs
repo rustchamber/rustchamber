@@ -478,6 +478,9 @@ pub fn button_ex(
         },
     );
     let enabled = enabled && ui.is_enabled();
+    if enabled {
+        crate::widgets::pointer(ui, &response);
+    }
     let hover_t = motion::Animated::from_id(response.id.with("hover"))
         .with_duration(motion::HOVER)
         .with_easing(motion::Easing::EaseOut)
@@ -2252,6 +2255,9 @@ pub fn menu_item_ex(
         },
     );
     let enabled = enabled && ui.is_enabled();
+    if enabled {
+        crate::widgets::pointer(ui, &response);
+    }
     let highlighted = enabled && (response.hovered() || response.has_focus());
     let fill = if selected {
         p.selection
@@ -2310,6 +2316,60 @@ pub fn menu_item_ex(
     response
 }
 
+pub fn menu_item_value(
+    ui: &mut Ui,
+    label: &str,
+    value: &str,
+    icon: Option<Icon>,
+    enabled: bool,
+    p: &Palette,
+) -> Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, MENU_ITEM_HEIGHT),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    let enabled = enabled && ui.is_enabled();
+    if enabled {
+        crate::widgets::pointer(ui, &response);
+    }
+    let highlighted = enabled && (response.hovered() || response.has_focus());
+    if highlighted {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(MENU_RADIUS), p.hover);
+    }
+    let text_color = if enabled { p.fg } else { p.disabled };
+    let mut x = rect.left() + 8.0;
+    if let Some(icon) = icon {
+        icons::paint(
+            ui,
+            icon,
+            Rect::from_center_size(Pos2::new(x + 7.0, rect.center().y), Vec2::splat(14.0)),
+            if enabled { p.fg_muted } else { p.disabled },
+        );
+        x += 14.0 + 8.0;
+    }
+    ui.painter().text(
+        Pos2::new(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        theme::font(theme::TEXT_UI_LABEL),
+        text_color,
+    );
+    ui.painter().text(
+        Pos2::new(rect.right() - 8.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        value,
+        theme::font(theme::TEXT_UI_LABEL),
+        if enabled { p.fg_muted } else { p.disabled },
+    );
+    response
+}
+
 pub fn menu_item_destructive(
     ui: &mut Ui,
     label: &str,
@@ -2328,6 +2388,9 @@ pub fn menu_item_destructive(
         },
     );
     let enabled = enabled && ui.is_enabled();
+    if enabled {
+        crate::widgets::pointer(ui, &response);
+    }
     let highlighted = enabled && (response.hovered() || response.has_focus());
     if highlighted {
         ui.painter().rect_filled(

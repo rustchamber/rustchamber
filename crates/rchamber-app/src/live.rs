@@ -31,6 +31,11 @@ pub fn read(event: &RawEvent) -> LiveEvent {
             session_id: string(data, "sessionID").unwrap_or_default(),
             title: string(data, "title").unwrap_or_default(),
         },
+        "session.viewed" => LiveEvent::SessionViewed {
+            session_id: string(data, "sessionID").unwrap_or_default(),
+            idle: number(data, "idle").unwrap_or(0.0),
+        },
+        "session.metadata.updated" => LiveEvent::SessionsDirty,
         "session.model.selected" => match serde_json::from_value::<ModelRef>(
             data.get("model").cloned().unwrap_or(Value::Null),
         ) {

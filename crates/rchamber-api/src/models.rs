@@ -53,6 +53,20 @@ pub struct LocationRef {
     pub directory: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SessionCursor {
+    pub previous: Option<String>,
+    pub next: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SessionPage {
+    #[serde(default)]
+    pub data: Vec<Session>,
+    #[serde(default)]
+    pub cursor: SessionCursor,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -73,6 +87,8 @@ pub struct Session {
     pub title: Option<String>,
     pub subpath: Option<String>,
     pub metadata: Option<Value>,
+    #[serde(default)]
+    pub permissions: Option<Value>,
     pub revert: Option<Value>,
     pub location: Option<LocationRef>,
     pub fork: Option<Value>,
@@ -88,6 +104,27 @@ impl Session {
 
     pub fn directory(&self) -> Option<&str> {
         self.location.as_ref().map(|l| l.directory.as_str())
+    }
+
+    pub fn allows_all(&self) -> bool {
+        self.permissions
+            .as_ref()
+            .and_then(Value::as_array)
+            .is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule.get("action").and_then(Value::as_str) == Some("*")
+                        && rule.get("resource").and_then(Value::as_str) == Some("*")
+                        && rule.get("effect").and_then(Value::as_str) == Some("allow")
+                })
+            })
+    }
+
+    pub fn set_allows_all(&mut self, allow_all: bool) {
+        self.permissions = allow_all.then(|| {
+            serde_json::json!([
+                { "action": "*", "resource": "*", "effect": "allow" }
+            ])
+        });
     }
 
     pub fn is_busy(&self) -> bool {
@@ -113,6 +150,7 @@ pub struct ModelRef {
     pub id: String,
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
 }
 
@@ -844,5 +882,28 @@ mod tests {
         let server: McpServer = serde_json::from_str(r#"{"name":"rea"}"#).unwrap();
         assert!(!server.is_connected());
         assert!(server.status.status.is_empty());
+    }
+
+    #[test]
+    fn model_variant_default_omits_the_field() {
+        let reference = ModelRef {
+            id: "deepseek-v4.1-flash".into(),
+            provider_id: "opencode-go".into(),
+            variant: None,
+        };
+        let value = serde_json::to_value(&reference).unwrap();
+        assert!(value.get("variant").is_none());
+        assert_eq!(value["id"], "deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn session_permission_mode_reads_and_writes_allow_all() {
+        let mut session: Session =
+            serde_json::from_str(r#"{"id":"ses_1","projectID":"p1","time":{}}"#).unwrap();
+        assert!(!session.allows_all());
+        session.set_allows_all(true);
+        assert!(session.allows_all());
+        session.set_allows_all(false);
+        assert!(!session.allows_all());
     }
 }

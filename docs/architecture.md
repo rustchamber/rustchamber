@@ -27,7 +27,7 @@ something changed, so an idle window costs almost no CPU.
 | `rchamber-git` | Git CLI wrapper with timeouts and porcelain parsing |
 | `rchamber-term` | PTY sessions and a VT emulator |
 | `rchamber-update` | Release discovery, background download, signature checks, and self-install |
-| `rchamber-app` | Action and event types, backend actor, state projection, drafts, attachments, snippets |
+| `rchamber-app` | Action and event types, backend actor, state projection, project/session store, drafts, attachments, snippets |
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theme engine |
 | `rchamber` | Binary entry point |
 
@@ -87,6 +87,19 @@ Settings and drafts are stored as JSON:
 
 Drafts are flushed 500 ms after the last edit. Window and panel geometry live in the same
 settings file.
+
+Projects, folders, display preferences, and new-session drafts live in `workspace.json`,
+separate from settings. The file is written through a process-wide lock and a unique
+temporary file, then renamed into place. A corrupt file is moved aside instead of being
+overwritten silently.
+
+RustChamber does not import the whole OpenCode session history. `AppModel::tracked_projects`
+turns the local project registry into a small set of directories; the backend lists only
+those directories and drops sessions older than the project's `added_at` timestamp. A fresh
+install therefore starts empty, and a large old OpenCode database does not delay launch.
+
+Each session can carry permission overrides in OpenCode. The composer shield writes a
+wildcard allow rule for **allow all**, or an empty ruleset for **ask always**.
 
 ## Composer
 

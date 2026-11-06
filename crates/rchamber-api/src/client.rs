@@ -270,7 +270,7 @@ impl Client {
         self.get("/api/info").await
     }
 
-    fn session_query(&self, limit: u32, search: Option<&str>) -> Vec<(&'static str, String)> {
+    fn session_query(&self, limit: u32) -> Vec<(&'static str, String)> {
         let mut query = vec![
             ("limit", limit.to_string()),
             ("order", "desc".to_string()),
@@ -280,22 +280,32 @@ impl Client {
         if let Some(directory) = &self.directory {
             query.push(("directory", directory.clone()));
         }
-        if let Some(search) = search {
-            query.push(("search", search.to_string()));
-        }
         query
     }
 
     pub async fn list_sessions(&self, limit: u32) -> Result<Vec<Session>, ApiError> {
-        let query = self.session_query(limit, None);
+        let query = self.session_query(limit);
         let response: SessionList = self.get_query("/api/session", &query).await?;
         Ok(response.data)
     }
 
-    pub async fn search_sessions(&self, query: &str) -> Result<Vec<Session>, ApiError> {
-        let params = self.session_query(60, Some(query));
-        let response: SessionList = self.get_query("/api/session", &params).await?;
-        Ok(response.data)
+    pub async fn list_sessions_directory(
+        &self,
+        directory: &str,
+        limit: u32,
+    ) -> Result<SessionPage, ApiError> {
+        let mut client = self.clone();
+        client.set_directory(Some(directory.to_string()));
+        client
+            .get_query(
+                "/api/session",
+                &[
+                    ("limit", limit.to_string()),
+                    ("order", "desc".into()),
+                    ("directory", directory.to_string()),
+                ],
+            )
+            .await
     }
 
     pub async fn get_session(&self, id: &str) -> Result<Session, ApiError> {
@@ -309,12 +319,15 @@ impl Client {
         title: Option<&str>,
         agent: Option<&str>,
         model: Option<&ModelRef>,
+        permissions: Option<&Value>,
     ) -> Result<Session, ApiError> {
         #[derive(Serialize)]
         struct Body<'a> {
             title: Option<&'a str>,
             agent: Option<&'a str>,
             model: Option<&'a ModelRef>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            permissions: Option<&'a Value>,
             location: LocationRef,
         }
         let envelope: Data<Session> = self
@@ -324,6 +337,7 @@ impl Client {
                     title,
                     agent,
                     model,
+                    permissions,
                     location: LocationRef {
                         directory: directory.to_string(),
                     },
@@ -349,6 +363,50 @@ impl Client {
             archived: bool,
         }
         self.patch_optional(&format!("/api/session/{id}"), &Body { archived })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_session_metadata(&self, id: &str, metadata: Value) -> Result<(), ApiError> {
+        #[derive(Serialize)]
+        struct Body {
+            metadata: Value,
+        }
+        self.patch_optional(&format!("/api/session/{id}"), &Body { metadata })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn view_session(&self, id: &str, idle: f64) -> Result<(), ApiError> {
+        #[derive(Serialize)]
+        struct Body {
+            idle: f64,
+        }
+        self.post_optional(&format!("/api/session/{id}/view"), &Body { idle })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn move_session(&self, id: &str, directory: &str) -> Result<(), ApiError> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            directory: &'a str,
+        }
+        self.post_optional(&format!("/api/session/{id}/move"), &Body { directory })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_session_permissions(
+        &self,
+        id: &str,
+        permissions: &Value,
+    ) -> Result<(), ApiError> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            permissions: &'a Value,
+        }
+        self.patch_optional(&format!("/api/session/{id}"), &Body { permissions })
             .await?;
         Ok(())
     }
@@ -555,6 +613,19 @@ impl Client {
 
     pub async fn projects(&self) -> Result<Vec<Project>, ApiError> {
         self.get("/api/project").await
+    }
+
+    pub async fn update_project(&self, id: &str, title: Option<&str>) -> Result<Project, ApiError> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            name: Option<&'a str>,
+        }
+        self.send(
+            self.request(reqwest::Method::PATCH, &format!("/api/project/{id}"))
+                .json(&Body { name: title }),
+        )
+        .await
     }
 
     pub async fn vcs_info(&self) -> Result<VcsInfo, ApiError> {
@@ -912,5 +983,18 @@ mod tests {
             Some(serde_json::json!({"ok": true}))
         );
         assert!(decode_optional_body("not json").is_err());
+    }
+
+    #[test]
+    fn session_page_decodes_cursor_and_defaults() {
+        let page: SessionPage =
+            serde_json::from_str(r#"{"data":[],"cursor":{"previous":null,"next":"abc"}}"#).unwrap();
+        assert!(page.data.is_empty());
+        assert_eq!(page.cursor.previous, None);
+        assert_eq!(page.cursor.next.as_deref(), Some("abc"));
+
+        let empty: SessionPage = serde_json::from_str("{}").unwrap();
+        assert!(empty.data.is_empty());
+        assert!(empty.cursor.next.is_none());
     }
 }

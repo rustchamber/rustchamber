@@ -2,8 +2,8 @@ use eframe::egui::{
     self, Color32, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText,
 };
 use rchamber_api::models::Message;
-use rchamber_app::Action;
-use rchamber_app::format::{money, shorten_path};
+use rchamber_app::format::money;
+use rchamber_app::{Action, ToastKind};
 
 use crate::app::{RustChamber, hover_amount, menu_nav_focus, menu_popup};
 use crate::chrome;
@@ -43,14 +43,18 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     crate::chrome::header_drag(ui, right);
 
     let session = app.model.active.as_ref().map(|chat| {
-        (
-            chat.session.id.clone(),
-            chat.title().to_string(),
-            chat.session
-                .directory()
-                .map(|dir| shorten_path(dir, 54))
-                .unwrap_or_default(),
-        )
+        let project = app
+            .model
+            .project_for_session(&chat.session)
+            .map(|project| project.display_name().to_string())
+            .or_else(|| {
+                chat.session.directory().and_then(|directory| {
+                    std::path::Path::new(directory)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                })
+            });
+        (chat.session.id.clone(), chat.title().to_string(), project)
     });
     let title = session
         .as_ref()
@@ -64,16 +68,37 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         0.0
     };
     let title_room = (right - left - menu_room).max(40.0);
-    let galley = elide(ui, title, theme::font(TITLE_SIZE), p.fg, title_room);
-    let title_center = row.center().y;
-    let title_end = left + galley.size().x;
+    let subtitle = session
+        .as_ref()
+        .and_then(|(_, _, project)| project.as_deref());
+    let title_center = if subtitle.is_some() {
+        row.center().y - 7.0
+    } else {
+        row.center().y
+    };
+    let title_galley = elide(ui, title, theme::font(TITLE_SIZE), p.fg, title_room);
+    let title_end = left + title_galley.size().x;
     ui.painter().galley(
-        Pos2::new(left, title_center - galley.size().y * 0.5),
-        galley,
+        Pos2::new(left, title_center - title_galley.size().y * 0.5),
+        title_galley,
         p.fg,
     );
+    if let Some(project) = subtitle {
+        let subtitle_galley = elide(
+            ui,
+            project,
+            theme::font(theme::TEXT_MICRO),
+            p.fg_muted,
+            title_room,
+        );
+        ui.painter().galley(
+            Pos2::new(left, row.center().y + 9.0 - subtitle_galley.size().y * 0.5),
+            subtitle_galley,
+            p.fg_muted,
+        );
+    }
 
-    if let Some((id, title, directory)) = session.as_ref() {
+    if let Some((id, title, _)) = session.as_ref() {
         let rect = Rect::from_center_size(
             Pos2::new(title_end + MENU_GAP + MENU_W * 0.5, title_center),
             Vec2::new(MENU_W, MENU_H),
@@ -92,7 +117,6 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
             MenuTarget {
                 id,
                 title,
-                directory,
                 open: menu_open,
             },
             trigger,
@@ -105,7 +129,6 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
 struct MenuTarget<'a> {
     id: &'a str,
     title: &'a str,
-    directory: &'a str,
     open: bool,
 }
 
@@ -395,29 +418,87 @@ fn session_menu(
     let mut items: Vec<Response> = Vec::new();
     menu_popup(ui.ctx(), &trigger, id, &mut open, p, 4.0, |ui, _| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        ui.set_width(196.0);
-        let response = widgets::menu_item(ui, "Rename session", Some(Icon::Pencil), None, p);
+        ui.set_width(236.0);
+        let response = widgets::menu_item(ui, "Rename", Some(Icon::Pencil), None, p);
         if response.clicked() {
             app.ui.rename = Some((target.id.to_string(), target.title.to_string()));
             app.ui.header_menu = false;
         }
         items.push(response);
-        let response = widgets::menu_item(ui, "Copy working directory", Some(Icon::Copy), None, p);
-        if response.clicked() {
-            ui.ctx().copy_text(target.directory.to_string());
-            app.ui.header_menu = false;
-        }
+        let response = widgets::menu_item_ex(
+            ui,
+            "Rename with AI",
+            Some(Icon::Spark),
+            None,
+            false,
+            false,
+            p,
+        );
+        let response = response.on_hover_text("No small model configured");
         items.push(response);
-        let response = widgets::menu_item(ui, "Refresh changes", Some(Icon::Refresh), None, p);
+        let response = widgets::menu_item(ui, "Copy session ID", Some(Icon::Copy), None, p);
         if response.clicked() {
-            app.backend.send(Action::LoadDiff(target.id.to_string()));
+            ui.ctx().copy_text(target.id.to_string());
+            app.model.toast(ToastKind::Success, "Session ID copied");
             app.ui.header_menu = false;
         }
         items.push(response);
         ui.add_space(2.0);
         widgets::hline(ui, p, 4.0);
         ui.add_space(2.0);
-        let response = widgets::menu_item(ui, "Archive session", Some(Icon::Archive), None, p);
+        let response = widgets::menu_item(ui, "Export Markdown", Some(Icon::Download), None, p);
+        if response.clicked() {
+            if let Some(session) = app
+                .model
+                .sessions
+                .iter()
+                .find(|session| session.id == target.id)
+                .cloned()
+            {
+                crate::sidebar::export_markdown(app, &session);
+            }
+            app.ui.header_menu = false;
+        }
+        items.push(response);
+        let response = widgets::menu_item_ex(
+            ui,
+            "Open in Mini Chat",
+            Some(Icon::MessageSquare),
+            None,
+            false,
+            false,
+            p,
+        );
+        let response = response.on_hover_text("Mini Chat is not available yet");
+        items.push(response);
+        let response = widgets::menu_item_ex(
+            ui,
+            "Move to a new worktree",
+            Some(Icon::Branch),
+            None,
+            false,
+            false,
+            p,
+        );
+        let response = response.on_hover_text("Worktrees are not available yet");
+        items.push(response);
+        let response = widgets::menu_item(ui, "Move session…", Some(Icon::FolderInput), None, p);
+        if response.clicked() {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                let directory = folder.to_string_lossy().to_string();
+                app.backend.send(Action::MoveSession {
+                    id: target.id.to_string(),
+                    directory,
+                });
+                app.model.toast(ToastKind::Info, "Moving session…");
+            }
+            app.ui.header_menu = false;
+        }
+        items.push(response);
+        ui.add_space(2.0);
+        widgets::hline(ui, p, 4.0);
+        ui.add_space(2.0);
+        let response = widgets::menu_item(ui, "Archive", Some(Icon::Archive), None, p);
         if response.clicked() {
             app.backend.send(Action::ArchiveSession {
                 id: target.id.to_string(),
@@ -427,11 +508,10 @@ fn session_menu(
             app.ui.header_menu = false;
         }
         items.push(response);
-        let response = widgets::menu_item(ui, "Delete session", Some(Icon::Trash), None, p);
+        let response =
+            widgets::menu_item_destructive(ui, "Delete", Some(Icon::Trash), None, true, p);
         if response.clicked() {
-            app.backend
-                .send(Action::DeleteSession(target.id.to_string()));
-            app.model.clear_active();
+            app.ui.confirm_delete = Some(target.id.to_string());
             app.ui.header_menu = false;
         }
         items.push(response);

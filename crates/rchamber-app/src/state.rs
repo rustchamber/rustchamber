@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rchamber_api::models::ServerInfo;
 use rchamber_api::models::{
@@ -7,9 +7,12 @@ use rchamber_api::models::{
     ToolPart, ToolState, VcsInfo,
 };
 
-use crate::action::{BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind};
+use crate::action::{
+    BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind, TrackedProject,
+};
 use crate::attachments::AttachmentItem;
 use crate::snippets::Snippet;
+use crate::workspace::{ProjectEntry, WorkspaceStore, paths_match};
 
 pub const TOAST_LIFETIME_MS: f64 = 4_000.0;
 pub const TOAST_EXIT_MS: f64 = 110.0;
@@ -36,10 +39,10 @@ pub struct Chat {
     pub error: Option<String>,
     pub has_more: bool,
     pub next_cursor: Option<String>,
-    pub last_activity: f64,
     pub scroll_to_bottom: bool,
     pub model: Option<ModelRef>,
     pub agent: Option<String>,
+    pub turn_started: Option<f64>,
 }
 
 impl Chat {
@@ -59,10 +62,10 @@ impl Chat {
             error: None,
             has_more: false,
             next_cursor: None,
-            last_activity: now_ms(),
             scroll_to_bottom: true,
             model,
             agent,
+            turn_started: None,
         }
     }
 
@@ -239,7 +242,10 @@ pub struct AppModel {
     pub connection_detail: Option<String>,
     pub server: Option<ServerInfo>,
     pub sessions: Vec<Session>,
+    pub session_previews: HashMap<String, String>,
+    pub preview_pending: HashSet<String>,
     pub projects: Vec<Project>,
+    pub workspace_store: WorkspaceStore,
     pub models: Vec<Model>,
     pub providers: Vec<Provider>,
     pub agents: Vec<Agent>,
@@ -255,12 +261,9 @@ pub struct AppModel {
     pub drafts: HashMap<String, String>,
     pub drafts_changed_at: f64,
     pub search: String,
-    pub searching: bool,
-    pub sessions_loading: bool,
     pub toasts: Vec<Toast>,
     pub toasts_paused: bool,
     pub startup: Startup,
-    pub unread: HashMap<String, usize>,
     toast_seq: u64,
     pub composer_focus: bool,
     pub show_settings: bool,
@@ -275,7 +278,10 @@ impl Default for AppModel {
             connection_detail: None,
             server: None,
             sessions: Vec::new(),
+            session_previews: HashMap::new(),
+            preview_pending: HashSet::new(),
             projects: Vec::new(),
+            workspace_store: WorkspaceStore::load(),
             models: Vec::new(),
             providers: Vec::new(),
             agents: Vec::new(),
@@ -291,12 +297,9 @@ impl Default for AppModel {
             drafts: HashMap::new(),
             drafts_changed_at: 0.0,
             search: String::new(),
-            searching: false,
-            sessions_loading: false,
             toasts: Vec::new(),
             toasts_paused: false,
             startup: Startup::Idle,
-            unread: HashMap::new(),
             toast_seq: 0,
             composer_focus: true,
             show_settings: false,
@@ -325,11 +328,24 @@ impl AppModel {
             }
             BackendEvent::Sessions(sessions) => {
                 self.sessions = sessions;
-                self.sessions_loading = false;
                 if let Some(chat) = &mut self.active
                     && let Some(session) = self.sessions.iter().find(|s| s.id == chat.session.id)
                 {
                     chat.session = session.clone();
+                }
+                let active_id = self.active.as_ref().map(|chat| chat.session.id.clone());
+                if let Some(active_id) = active_id
+                    && let Some(session) =
+                        self.sessions.iter().find(|session| session.id == active_id)
+                {
+                    let previous = self.workspace_store.last_session_id.clone();
+                    let previous_by_project = self.workspace_store.last_session_by_project.clone();
+                    self.workspace_store.note_session(session);
+                    if self.workspace_store.last_session_id != previous
+                        || self.workspace_store.last_session_by_project != previous_by_project
+                    {
+                        self.workspace_store.save();
+                    }
                 }
             }
             BackendEvent::SessionUpsert(session) => {
@@ -349,13 +365,20 @@ impl AppModel {
                 chat.draft = draft;
                 chat.model = session.model.clone();
                 chat.agent = session.agent.clone();
-                self.unread.remove(&id);
+                self.workspace_store.note_session(&session);
+                if let Some(project) = self.workspace_store.project_for_session(&session) {
+                    let project_id = project.id.clone();
+                    self.workspace_store.mark_active_project(&project_id);
+                }
+                self.workspace_store.save();
                 self.active = Some(chat);
                 upsert(&mut self.sessions, session);
                 self.composer_focus = true;
             }
             BackendEvent::SessionRemoved(id) => {
                 self.sessions.retain(|s| s.id != id);
+                self.session_previews.remove(&id);
+                self.preview_pending.remove(&id);
                 if self
                     .active
                     .as_ref()
@@ -374,10 +397,12 @@ impl AppModel {
                     let busy = infer_busy(&messages);
                     chat.messages = merge_messages(&chat.messages, messages, chat.busy || busy);
                     chat.busy = busy;
+                    if busy && chat.turn_started.is_none() {
+                        chat.turn_started = Some(now_ms());
+                    }
                     chat.loading = false;
                     chat.error = None;
                     chat.scroll_to_bottom = true;
-                    chat.last_activity = now_ms();
                 }
             }
             BackendEvent::OlderMessages {
@@ -400,7 +425,40 @@ impl AppModel {
             BackendEvent::Providers(providers) => self.providers = providers,
             BackendEvent::Agents(agents) => self.agents = agents,
             BackendEvent::Commands(commands) => self.commands = commands,
-            BackendEvent::Projects(projects) => self.projects = projects,
+            BackendEvent::Projects(projects) => {
+                self.projects = projects;
+            }
+            BackendEvent::SessionMetadataUpdated(session) => {
+                let session = *session;
+                if let Some(chat) = &mut self.active
+                    && chat.session.id == session.id
+                {
+                    chat.session = session.clone();
+                }
+                upsert(&mut self.sessions, session);
+            }
+            BackendEvent::SessionViewed { id, idle } => {
+                self.mark_viewed_local(&id, idle);
+                if let Some(chat) = &mut self.active
+                    && chat.session.id == id
+                {
+                    chat.session.time.viewed = Some(
+                        chat.session
+                            .time
+                            .viewed
+                            .map_or(idle, |viewed| viewed.max(idle)),
+                    );
+                }
+            }
+            BackendEvent::SessionPreview { id, text } => {
+                self.preview_pending.remove(&id);
+                self.session_previews.insert(id, text);
+            }
+            BackendEvent::ProjectAdded { directory, name } => {
+                self.workspace_store
+                    .add_local_project(&directory, name.as_deref());
+                self.workspace_store.save();
+            }
             BackendEvent::Permissions {
                 session_id,
                 requests,
@@ -447,9 +505,12 @@ impl AppModel {
             BackendEvent::Toast { kind, message } => self.toast(kind, message),
             BackendEvent::WorkspaceChanged(directory) => {
                 self.save_draft();
-                self.workspace = Some(directory);
-                self.active = None;
-                self.sessions_loading = true;
+                self.workspace = Some(directory.clone());
+                self.workspace_store.active_project_id = self
+                    .workspace_store
+                    .project_for_directory(&directory)
+                    .map(|project| project.id.clone());
+                self.workspace_store.save();
                 self.files = FilesState::default();
             }
             BackendEvent::PromptQueued { session_id } => {
@@ -457,6 +518,9 @@ impl AppModel {
                     && chat.session.id == session_id
                 {
                     chat.busy = true;
+                    if chat.turn_started.is_none() {
+                        chat.turn_started = Some(now_ms());
+                    }
                 }
             }
         }
@@ -471,9 +535,7 @@ impl AppModel {
             LiveEvent::TransportDisconnected(reason) => {
                 self.connection = Connection::Reconnecting(reason);
             }
-            LiveEvent::SessionsDirty => {
-                self.sessions_loading = true;
-            }
+            LiveEvent::SessionsDirty => {}
             LiveEvent::SessionDeleted { session_id } => {
                 self.sessions.retain(|s| s.id != session_id);
                 if self
@@ -492,6 +554,19 @@ impl AppModel {
                     && chat.session.id == session_id
                 {
                     chat.session.title = Some(title);
+                }
+            }
+            LiveEvent::SessionViewed { session_id, idle } => {
+                self.mark_viewed_local(&session_id, idle);
+                if let Some(chat) = &mut self.active
+                    && chat.session.id == session_id
+                {
+                    chat.session.time.viewed = Some(
+                        chat.session
+                            .time
+                            .viewed
+                            .map_or(idle, |viewed| viewed.max(idle)),
+                    );
                 }
             }
             LiveEvent::SessionModel { session_id, model } => {
@@ -519,38 +594,36 @@ impl AppModel {
                 error,
             } => {
                 let Some(chat) = self.active.as_mut().filter(|c| c.session.id == session_id) else {
-                    if state != ExecutionState::Started {
-                        self.sessions_loading = true;
-                    }
                     return;
                 };
                 match state {
                     ExecutionState::Started => {
                         chat.busy = true;
+                        chat.turn_started = Some(now_ms());
                         chat.error = None;
                     }
                     ExecutionState::Succeeded => {
                         chat.busy = false;
+                        chat.turn_started = None;
                         chat.session.outcome = Some(rchamber_api::models::Outcome::Succeeded);
                         chat.session.time.idle = Some(now_ms());
                         chat.scroll_to_bottom = true;
-                        self.sessions_loading = true;
                     }
                     ExecutionState::Failed => {
                         chat.busy = false;
+                        chat.turn_started = None;
                         chat.session.outcome = Some(rchamber_api::models::Outcome::Failed);
                         chat.session.time.idle = Some(now_ms());
                         if let Some(error) = error {
                             chat.error = Some(error.message.clone());
                             self.toast(ToastKind::Error, error.message);
                         }
-                        self.sessions_loading = true;
                     }
                     ExecutionState::Interrupted => {
                         chat.busy = false;
+                        chat.turn_started = None;
                         chat.session.outcome = Some(rchamber_api::models::Outcome::Interrupted);
                         chat.session.time.idle = Some(now_ms());
-                        self.sessions_loading = true;
                     }
                 }
             }
@@ -844,36 +917,227 @@ impl AppModel {
     }
 
     pub fn sorted_sessions(&self) -> Vec<&Session> {
+        let needle = self.search.trim().to_lowercase();
+        let needle = if needle.is_empty() {
+            None
+        } else {
+            Some(needle)
+        };
         let mut sessions: Vec<&Session> = self
             .sessions
             .iter()
-            .filter(|session| {
-                if self.search.trim().is_empty() {
-                    true
-                } else {
-                    let needle = self.search.to_lowercase();
-                    session.title().to_lowercase().contains(&needle)
+            .filter(|session| match &needle {
+                None => true,
+                Some(needle) => {
+                    session.title().to_lowercase().contains(needle)
+                        || session.id.to_lowercase().contains(needle)
                         || session
                             .directory()
-                            .map(|d| d.to_lowercase().contains(&needle))
+                            .map(|directory| directory.to_lowercase().contains(needle))
                             .unwrap_or(false)
                 }
             })
             .collect();
-        sessions.sort_by(|a, b| {
-            b.time
-                .updated
-                .partial_cmp(&a.time.updated)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sort_sessions_by_recency(&mut sessions);
         sessions
     }
 
-    pub fn sessions_for_project(&self, canonical: &str) -> Vec<&Session> {
-        self.sorted_sessions()
-            .into_iter()
-            .filter(|s| s.directory() == Some(canonical))
+    pub fn active_sessions(&self) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| session.time.archived.is_none())
             .collect()
+    }
+
+    pub fn archived_sessions(&self) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| session.time.archived.is_some())
+            .collect()
+    }
+
+    pub fn root_sessions(&self) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| session.time.archived.is_none() && session.parent_id.is_none())
+            .collect()
+    }
+
+    pub fn children_of(&self, id: &str) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| session.parent_id.as_deref() == Some(id))
+            .collect()
+    }
+
+    pub fn sessions_for_project(&self, project: &ProjectEntry) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| {
+                session.project_id == project.id
+                    || session
+                        .directory()
+                        .is_some_and(|directory| paths_match(directory, &project.canonical))
+            })
+            .collect()
+    }
+
+    pub fn sessions_without_project(&self) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|session| self.workspace_store.project_for_session(session).is_none())
+            .collect()
+    }
+
+    pub fn request_session_preview(&mut self, id: &str) -> bool {
+        if self.session_previews.contains_key(id) || !self.preview_pending.insert(id.to_string()) {
+            return false;
+        }
+        true
+    }
+
+    pub fn is_unread(&self, session: &Session) -> bool {
+        if self.active_id() == Some(session.id.as_str())
+            || session.parent_id.is_some()
+            || session.time.archived.is_some()
+        {
+            return false;
+        }
+        match session.time.idle {
+            Some(idle) => session.time.viewed.is_none_or(|viewed| viewed < idle),
+            None => false,
+        }
+    }
+
+    pub fn is_pinned(&self, session: &Session) -> bool {
+        metadata_flag(session, "pinned")
+    }
+
+    pub fn is_work(&self, session: &Session) -> bool {
+        metadata_flag(session, "work")
+    }
+
+    pub fn set_pinned_local(&mut self, id: &str, pinned: bool) {
+        self.update_session_local(id, |session| set_metadata_flag(session, "pinned", pinned));
+    }
+
+    pub fn set_work_local(&mut self, id: &str, work: bool) {
+        self.update_session_local(id, |session| set_metadata_flag(session, "work", work));
+    }
+
+    pub fn mark_viewed_local(&mut self, id: &str, idle: f64) {
+        self.update_session_local(id, |session| {
+            session.time.viewed = Some(session.time.viewed.map_or(idle, |viewed| viewed.max(idle)));
+        });
+    }
+
+    pub fn tracked_projects(&self) -> Vec<TrackedProject> {
+        let mut projects: Vec<TrackedProject> = self
+            .workspace_store
+            .projects
+            .iter()
+            .filter(|project| !project.hidden)
+            .map(|project| TrackedProject {
+                directory: project.canonical.clone(),
+                since: project.added_at - 1_000.0,
+            })
+            .collect();
+        if let Some(chats) = WorkspaceStore::chats_directory()
+            && !projects
+                .iter()
+                .any(|project| paths_match(&project.directory, &chats.to_string_lossy()))
+        {
+            projects.push(TrackedProject {
+                directory: chats.to_string_lossy().to_string(),
+                since: 0.0,
+            });
+        }
+        projects
+    }
+
+    pub fn workspace_projects(&self) -> Vec<&ProjectEntry> {
+        self.workspace_store.ordered_projects()
+    }
+
+    pub fn project_by_id(&self, id: &str) -> Option<&ProjectEntry> {
+        self.workspace_store
+            .projects
+            .iter()
+            .find(|project| project.id == id)
+    }
+
+    pub fn project_for_session(&self, session: &Session) -> Option<&ProjectEntry> {
+        self.workspace_store.project_for_session(session)
+    }
+
+    pub fn add_project(&mut self, directory: &str, name: Option<&str>) -> String {
+        let id = self.workspace_store.add_local_project(directory, name);
+        self.workspace_store.save();
+        id
+    }
+
+    pub fn remove_project(&mut self, id: &str) {
+        self.workspace_store.remove_project(id);
+        self.workspace_store.save();
+    }
+
+    pub fn create_folder(&mut self, project_id: &str, name: &str) -> String {
+        let id = self.workspace_store.create_folder(project_id, name);
+        self.workspace_store.save();
+        id
+    }
+
+    pub fn rename_folder(&mut self, id: &str, name: &str) {
+        self.workspace_store.rename_folder(id, name);
+        self.workspace_store.save();
+    }
+
+    pub fn delete_folder(&mut self, id: &str) {
+        self.workspace_store.delete_folder(id);
+        self.workspace_store.save();
+    }
+
+    pub fn set_folder_collapsed(&mut self, id: &str, collapsed: bool) {
+        self.workspace_store.set_folder_collapsed(id, collapsed);
+        self.workspace_store.save();
+    }
+
+    pub fn assign_session_to_folder(&mut self, folder_id: &str, session_id: &str) {
+        self.workspace_store.assign_session(folder_id, session_id);
+        self.workspace_store.save();
+    }
+
+    pub fn unassign_session_from_folder(&mut self, session_id: &str) {
+        self.workspace_store.unassign_session(session_id);
+        self.workspace_store.save();
+    }
+
+    pub fn forget_sessions_from_folders(&mut self, ids: &[String]) {
+        for id in ids {
+            self.workspace_store.unassign_session(id);
+        }
+        self.workspace_store.save();
+    }
+
+    pub fn rename_project(&mut self, id: &str, name: &str) {
+        if let Some(project) = self
+            .workspace_store
+            .projects
+            .iter_mut()
+            .find(|project| project.id == id)
+        {
+            project.name_override = Some(name.to_string());
+            self.workspace_store.save();
+        }
+    }
+
+    fn update_session_local(&mut self, id: &str, mut update: impl FnMut(&mut Session)) {
+        if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) {
+            update(session);
+        }
+        if let Some(chat) = self.active.as_mut().filter(|chat| chat.session.id == id) {
+            update(&mut chat.session);
+        }
     }
 
     pub fn model_for(&self, reference: &ModelRef) -> Option<&Model> {
@@ -1026,6 +1290,88 @@ fn upsert(sessions: &mut Vec<Session>, session: Session) {
     }
 }
 
+fn sort_sessions_by_recency(sessions: &mut [&Session]) {
+    sessions.sort_by(|a, b| {
+        b.time
+            .updated
+            .partial_cmp(&a.time.updated)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn metadata_flag(session: &Session, key: &str) -> bool {
+    let Some(value) = session
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get("openchamber"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|openchamber| openchamber.get(key))
+    else {
+        return false;
+    };
+    match key {
+        "pinned" => {
+            value.as_bool() == Some(true)
+                || value
+                    .as_object()
+                    .is_some_and(|pinned| pinned.contains_key("at"))
+        }
+        "work" => {
+            value.as_bool() == Some(true)
+                || value
+                    .as_object()
+                    .and_then(|work| work.get("state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("open")
+        }
+        _ => value.as_bool() == Some(true),
+    }
+}
+
+fn set_metadata_flag(session: &mut Session, key: &str, value: bool) {
+    let mut root = match session.metadata.take() {
+        Some(serde_json::Value::Object(metadata)) => metadata,
+        _ => serde_json::Map::new(),
+    };
+    let openchamber = root
+        .entry("openchamber")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !openchamber.is_object() {
+        *openchamber = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Some(openchamber) = openchamber.as_object_mut() {
+        match key {
+            "pinned" if value => {
+                openchamber.insert("pinned".into(), serde_json::json!({ "at": now_ms() }));
+            }
+            "pinned" => {
+                openchamber.remove("pinned");
+            }
+            "work" if value => {
+                openchamber.insert(
+                    "work".into(),
+                    serde_json::json!({
+                        "state": "open",
+                        "openedAt": now_ms(),
+                        "openedBy": "user",
+                    }),
+                );
+            }
+            "work" => {
+                openchamber.insert(
+                    "work".into(),
+                    serde_json::json!({ "state": "done", "doneAt": now_ms() }),
+                );
+            }
+            _ => {
+                openchamber.insert(key.to_string(), serde_json::Value::Bool(value));
+            }
+        }
+    }
+    session.metadata = Some(serde_json::Value::Object(root));
+}
+
 pub fn now_ms() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -1090,4 +1436,174 @@ fn infer_busy(messages: &[Message]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rchamber_api::models::{LocationRef, SessionTime};
+
+    fn session(
+        id: &str,
+        parent: Option<&str>,
+        project: &str,
+        directory: &str,
+        archived: bool,
+        idle: f64,
+        viewed: Option<f64>,
+    ) -> Session {
+        Session {
+            id: id.into(),
+            parent_id: parent.map(str::to_string),
+            project_id: project.into(),
+            slug: None,
+            agent: None,
+            model: None,
+            cost: 0.0,
+            tokens: Default::default(),
+            outcome: None,
+            permissions: None,
+            time: SessionTime {
+                created: 0.0,
+                updated: idle,
+                busy: None,
+                idle: Some(idle),
+                viewed,
+                archived: archived.then_some(idle),
+            },
+            title: Some(id.into()),
+            subpath: None,
+            metadata: None,
+            revert: None,
+            location: Some(LocationRef {
+                directory: directory.into(),
+            }),
+            fork: None,
+        }
+    }
+
+    fn model(sessions: Vec<Session>) -> AppModel {
+        AppModel {
+            workspace_store: WorkspaceStore::default(),
+            sessions,
+            ..AppModel::default()
+        }
+    }
+
+    #[test]
+    fn global_session_helpers_cover_directories_children_and_archive() {
+        let model = model(vec![
+            session("r1", None, "p1", "/tmp/alpha", false, 10.0, None),
+            session("c1", Some("r1"), "p1", "/tmp/alpha", false, 11.0, None),
+            session("c2", Some("c1"), "p1", "/tmp/alpha", false, 12.0, None),
+            session("r2", None, "p2", "/tmp/beta", false, 13.0, None),
+            session("r3", None, "p3", "/tmp/gamma", false, 14.0, None),
+            session("r4", None, "p3", "/tmp/gamma", true, 15.0, None),
+        ]);
+
+        assert_eq!(model.sessions.len(), 6);
+        assert_eq!(model.active_sessions().len(), 5);
+        assert_eq!(model.archived_sessions().len(), 1);
+        let roots: Vec<&str> = model
+            .root_sessions()
+            .into_iter()
+            .map(|session| session.id.as_str())
+            .collect();
+        assert_eq!(roots, vec!["r1", "r2", "r3"]);
+        let children: Vec<&str> = model
+            .children_of("r1")
+            .into_iter()
+            .map(|session| session.id.as_str())
+            .collect();
+        assert_eq!(children, vec!["c1"]);
+        let grandchildren: Vec<&str> = model
+            .children_of("c1")
+            .into_iter()
+            .map(|session| session.id.as_str())
+            .collect();
+        assert_eq!(grandchildren, vec!["c2"]);
+        assert_eq!(model.sessions_without_project().len(), 6);
+    }
+
+    #[test]
+    fn project_matching_and_unread_use_session_fields() {
+        let mut model = model(vec![
+            session("r1", None, "p1", "/tmp/alpha", false, 20.0, Some(10.0)),
+            session(
+                "c1",
+                Some("r1"),
+                "p1",
+                "/tmp/alpha",
+                false,
+                21.0,
+                Some(21.0),
+            ),
+        ]);
+        let project_id = model
+            .workspace_store
+            .add_local_project("/tmp/alpha/", Some("Alpha"));
+
+        let owned: Vec<&str> = model
+            .sessions_for_project(model.project_by_id(&project_id).unwrap())
+            .into_iter()
+            .map(|session| session.id.as_str())
+            .collect();
+        assert_eq!(owned, vec!["r1", "c1"]);
+        assert!(model.is_unread(&model.sessions[0]));
+        assert!(!model.is_unread(&model.sessions[1]));
+        assert_eq!(model.sessions_without_project().len(), 0);
+
+        model.mark_viewed_local("r1", 20.0);
+        assert!(!model.is_unread(&model.sessions[0]));
+        assert_eq!(model.sessions[0].time.viewed, Some(20.0));
+    }
+
+    #[test]
+    fn metadata_flags_merge_without_dropping_other_keys() {
+        let mut first = session("r1", None, "p1", "/tmp/alpha", false, 20.0, None);
+        first.metadata = Some(serde_json::json!({"other": 1}));
+        let mut model = model(vec![first]);
+
+        model.set_pinned_local("r1", true);
+        model.set_work_local("r1", true);
+        assert!(model.is_pinned(&model.sessions[0]));
+        assert!(model.is_work(&model.sessions[0]));
+        assert_eq!(
+            model.sessions[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("other"))
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+
+        model.set_pinned_local("r1", false);
+        assert!(!model.is_pinned(&model.sessions[0]));
+        assert!(model.is_work(&model.sessions[0]));
+    }
+
+    #[test]
+    fn activating_a_session_opens_and_selects_its_tab() {
+        let mut model = model(vec![session(
+            "r1",
+            None,
+            "p1",
+            "/tmp/alpha",
+            false,
+            20.0,
+            None,
+        )]);
+
+        model.apply(BackendEvent::SessionActivated(Box::new(session(
+            "r1",
+            None,
+            "p1",
+            "/tmp/alpha",
+            false,
+            20.0,
+            None,
+        ))));
+
+        assert_eq!(model.active_id(), Some("r1"));
+    }
 }

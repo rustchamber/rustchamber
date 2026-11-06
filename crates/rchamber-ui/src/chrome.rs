@@ -128,7 +128,7 @@ pub fn titlebar_controls(ctx: &egui::Context, app: &mut RustChamber, p: &Palette
         app.ui.sidebar_folded_by_zone = false;
     }
     if create {
-        app.create_session(None);
+        app.begin_new_session(None);
     }
 }
 
@@ -146,6 +146,7 @@ fn control(
         CONTROLS_SIZE.min(max_width)
     };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, CONTROLS_SIZE), Sense::click());
+    crate::widgets::pointer(ui, &response);
     let hovered = hover_amount(ui.ctx(), response.id, response.hovered());
     let color = if active {
         p.fg

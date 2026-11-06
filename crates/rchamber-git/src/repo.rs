@@ -346,6 +346,85 @@ pub fn fetch(repo: &Path) -> Result<(), GitError> {
     run(repo, &["fetch", "--all", "--prune"]).map(|_| ())
 }
 
+pub fn clone_repo(url: &str, destination: &Path) -> Result<(), GitError> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(GitError::Failed("repository URL is empty".into()));
+    }
+    if url.starts_with('-') || url.contains('\0') || url.contains('\n') || url.contains('\r') {
+        return Err(GitError::Failed("repository URL is invalid".into()));
+    }
+    if destination.as_os_str().is_empty() {
+        return Err(GitError::Failed("clone destination is empty".into()));
+    }
+    if let Some(parent) = destination.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.is_dir()
+    {
+        return Err(GitError::Failed(format!(
+            "clone destination parent does not exist: {}",
+            parent.display()
+        )));
+    }
+    if destination.exists() {
+        if !destination.is_dir() {
+            return Err(GitError::Failed(format!(
+                "clone destination is not a directory: {}",
+                destination.display()
+            )));
+        }
+        if std::fs::read_dir(destination)?.next().is_some() {
+            return Err(GitError::Failed(format!(
+                "clone destination is not empty: {}",
+                destination.display()
+            )));
+        }
+    }
+
+    let mut command = Command::new("git");
+    command
+        .args(["clone", "--"])
+        .arg(url)
+        .arg(destination)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| GitError::Failed(format!("could not start git: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| GitError::Failed("git stdout is unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| GitError::Failed("git stderr is unavailable".into()))?;
+    let out_reader = std::thread::spawn(move || read_stream(stdout));
+    let err_reader = std::thread::spawn(move || read_stream(stderr));
+    let status = child.wait()?;
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    if status.success() {
+        return Ok(());
+    }
+    let message = if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    };
+    Err(GitError::Failed(if message.is_empty() {
+        "git clone failed".into()
+    } else {
+        message
+    }))
+}
+
 fn run(repo: &Path, args: &[&str]) -> Result<String, GitError> {
     let mut command = Command::new("git");
     command
@@ -653,4 +732,61 @@ fn is_empty_history(error: &GitError) -> bool {
         || message.contains("bad revision")
         || message.contains("bad default revision")
         || message.contains("ambiguous argument 'HEAD'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "rchamber-git-{label}-{}-{stamp}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn clone_rejects_invalid_arguments() {
+        let target = temp_dir("invalid");
+        std::fs::create_dir_all(&target).unwrap();
+        assert!(matches!(
+            clone_repo("", &target.join("repo")),
+            Err(GitError::Failed(message)) if message.contains("empty")
+        ));
+        assert!(matches!(
+            clone_repo("--upload-pack=evil", &target.join("repo")),
+            Err(GitError::Failed(message)) if message.contains("invalid")
+        ));
+        std::fs::remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn clone_rejects_non_empty_destination() {
+        let target = temp_dir("non-empty");
+        let destination = target.join("repo");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(destination.join("file.txt"), "content").unwrap();
+        assert!(matches!(
+            clone_repo("https://example.com/owner/repo.git", &destination),
+            Err(GitError::Failed(message)) if message.contains("not empty")
+        ));
+        std::fs::remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn clone_creates_a_local_repository() {
+        let target = temp_dir("local");
+        let source = target.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        init(&source).unwrap();
+        let destination = target.join("cloned");
+        clone_repo(&source.to_string_lossy(), &destination).unwrap();
+        assert!(destination.join(".git").exists());
+        std::fs::remove_dir_all(&target).unwrap();
+    }
 }

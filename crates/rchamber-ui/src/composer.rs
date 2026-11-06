@@ -933,7 +933,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
             text_id,
             home,
             busy,
-            &mut draft,
+            &draft,
             has_attachments,
             &key,
             &mut actions,
@@ -1023,15 +1023,35 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
         if home {
             let model = current_model(app);
             let agent = current_agent(app);
+            let directory = app.home_target_directory();
+            if let Some(target) = app.ui.home_project.clone()
+                && target != crate::app::CHATS_TARGET
+            {
+                app.model.workspace_store.mark_active_project(&target);
+            }
+            if let Some(target) = app.ui.home_project.clone() {
+                app.model.workspace_store.new_session_drafts.remove(&target);
+            }
+            app.model.workspace_store.save();
             actions.push(Action::CreateSession {
-                directory: app.workspace_directory(),
+                directory,
                 prompt: Some(text),
                 files,
                 model,
                 agent,
+                allow_all: app.ui.home_allow_all,
             });
             draft.clear();
         } else if let Some(id) = &session_id {
+            if let Some(session) = app.model.sessions.iter().find(|session| &session.id == id)
+                && !app.model.is_work(session)
+            {
+                app.model.set_work_local(id, true);
+                actions.push(Action::SetSessionWork {
+                    id: id.clone(),
+                    work: true,
+                });
+            }
             actions.push(Action::Send {
                 session_id: id.clone(),
                 text,
@@ -1594,7 +1614,7 @@ fn composer_footer(
     text_id: Id,
     home: bool,
     busy: bool,
-    draft: &mut String,
+    draft: &str,
     has_attachments: bool,
     key: &str,
     actions: &mut Vec<Action>,
@@ -1611,24 +1631,63 @@ fn composer_footer(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(FOOTER_GAP, 0.0);
-                composer_attachment_controls(ui, app, p, key, draft, text_id);
+                composer_attachment_controls(ui, app, p, key);
                 let pending = app
                     .model
                     .active
                     .as_ref()
                     .map(|chat| chat.pending.len())
                     .unwrap_or(0);
-                if footer_icon_button(ui, Icon::Shield, FOOTER_GLYPH, p.fg_muted, true)
-                    .on_hover_text(if pending > 0 {
-                        "Permission needed"
+                let allow_all = if home {
+                    app.ui.home_allow_all
+                } else {
+                    app.model
+                        .active
+                        .as_ref()
+                        .is_some_and(|chat| chat.session.allows_all())
+                };
+                let shield = footer_icon_button(
+                    ui,
+                    if allow_all {
+                        Icon::ShieldCheck
                     } else {
-                        "Permission mode: ask"
-                    })
-                    .clicked()
-                {
+                        Icon::ShieldUser
+                    },
+                    FOOTER_GLYPH,
+                    if allow_all { p.blue } else { p.fg_muted },
+                    true,
+                );
+                let label = if pending > 0 {
+                    "Permission needed"
+                } else if allow_all {
+                    "Permissions: allow all"
+                } else {
+                    "Permissions: ask always"
+                };
+                if shield.on_hover_text(label).clicked() {
+                    let next = !allow_all;
+                    if home {
+                        app.ui.home_allow_all = next;
+                        app.model.workspace_store.allow_all_new_sessions = next;
+                        app.model.workspace_store.save();
+                    } else if let Some(chat) = &mut app.model.active {
+                        chat.session.set_allows_all(next);
+                        actions.push(Action::SetSessionPermissions {
+                            id: chat.session.id.clone(),
+                            allow_all: next,
+                        });
+                    }
                     app.model.toast(
-                        rchamber_app::ToastKind::Info,
-                        "Permission mode is managed by the agent settings",
+                        if next {
+                            rchamber_app::ToastKind::Warning
+                        } else {
+                            rchamber_app::ToastKind::Info
+                        },
+                        if next {
+                            "Permissions: allow all for this session"
+                        } else {
+                            "Permissions: ask always"
+                        },
                     );
                 }
 
@@ -1729,14 +1788,7 @@ fn footer_icon_button(
     response
 }
 
-fn composer_attachment_controls(
-    ui: &mut Ui,
-    app: &mut RustChamber,
-    p: &Palette,
-    key: &str,
-    draft: &mut String,
-    text_id: Id,
-) {
+fn composer_attachment_controls(ui: &mut Ui, app: &mut RustChamber, p: &Palette, key: &str) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(FOOTER_BUTTON), Sense::click());
     icons::paint(
         ui,
@@ -1766,15 +1818,6 @@ fn composer_attachment_controls(
             }
         }
         items.push(attach);
-        let mention = widgets::menu_item(ui, "Mention folder", Some(Icon::Folder), None, p);
-        if mention.clicked()
-            && let Some(path) = rfd::FileDialog::new().pick_folder()
-        {
-            let mention = folder_mention(&path, app.model.workspace.as_deref());
-            append_mention(draft, &mention);
-            set_cursor_to_end(ui.ctx(), text_id, draft);
-        }
-        items.push(mention);
     });
     menu_nav_focus(ui.ctx(), id, open, &items);
     if response.clicked() {
@@ -3978,39 +4021,6 @@ fn set_cursor_to_end(ctx: &egui::Context, text_id: Id, draft: &str) {
         state.store(ctx, text_id);
     }
     ctx.memory_mut(|memory| memory.request_focus(text_id));
-}
-
-fn append_mention(draft: &mut String, mention: &str) {
-    if draft
-        .chars()
-        .last()
-        .is_some_and(|character| !character.is_whitespace())
-    {
-        draft.push(' ');
-    }
-    draft.push_str(mention);
-    if !mention.ends_with(' ') {
-        draft.push(' ');
-    }
-}
-
-fn folder_mention(path: &std::path::Path, workspace: Option<&str>) -> String {
-    let mut value = path.to_string_lossy().replace('\\', "/");
-    if let Some(workspace) = workspace
-        && let Ok(relative) = path.strip_prefix(workspace)
-    {
-        value = relative.to_string_lossy().replace('\\', "/");
-    }
-    if value.is_empty() {
-        value = path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "folder".into());
-    }
-    if !value.ends_with('/') {
-        value.push('/');
-    }
-    format!("@{value}")
 }
 
 pub fn current_model(app: &RustChamber) -> Option<ModelRef> {

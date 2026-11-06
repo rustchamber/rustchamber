@@ -1,24 +1,28 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rchamber_api::client::ClientConfig;
-use rchamber_api::models::Session;
+use rchamber_api::models::{Message, Part, Session};
 use rchamber_api::process::LaunchOptions;
 use rchamber_api::{ApiError, Client, RawEvent, ServerHandle};
+use serde_json::{Map, Value};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::Instant;
 
 use crate::action::{
     Action, BackendEvent, Connection, ExecutionState, LaunchConfig, LiveEvent, ToastKind,
+    TrackedProject,
 };
 use crate::live;
 use crate::snippets;
+use crate::workspace::normalize_path;
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 const MCP_SETTLE_ATTEMPTS: u32 = 8;
 const MCP_SETTLE_DELAY: Duration = Duration::from_secs(2);
+const SESSIONS_PER_PROJECT: u32 = 100;
 
 pub struct Backend {
     pub actions: UnboundedSender<Action>,
@@ -71,13 +75,14 @@ struct Inner {
     active: Option<String>,
     subscription: Option<rchamber_api::Subscription>,
     cursors: HashMap<String, Option<String>>,
-    known_sessions: HashSet<String>,
     pending_sessions: bool,
     pending_messages: bool,
     pending_inbox: bool,
     pending_mcp: bool,
     mcp_attempts: u32,
     snippets: Vec<snippets::Snippet>,
+    tracked: Vec<TrackedProject>,
+    cached_sessions: HashMap<String, Vec<Session>>,
     next_flush: Option<Instant>,
 }
 
@@ -99,13 +104,14 @@ impl Inner {
             active: None,
             subscription: None,
             cursors: HashMap::new(),
-            known_sessions: HashSet::new(),
             pending_sessions: false,
             pending_messages: false,
             pending_inbox: false,
             pending_mcp: false,
             mcp_attempts: 0,
             snippets: Vec::new(),
+            tracked: Vec::new(),
+            cached_sessions: HashMap::new(),
             next_flush: None,
         }
     }
@@ -202,11 +208,6 @@ impl Inner {
             return;
         };
         tracing::debug!("bootstrapping from {}", client.base_url());
-        let sessions = with_retry(|| {
-            let client = client.clone();
-            async move { client.list_sessions(100).await }
-        })
-        .await;
         let models = with_retry(|| {
             let client = client.clone();
             async move { client.models().await }
@@ -242,13 +243,6 @@ impl Inner {
             async move { client.providers().await }
         })
         .await;
-        match sessions {
-            Ok(sessions) => {
-                self.remember_sessions(&sessions);
-                self.emit(BackendEvent::Sessions(sessions));
-            }
-            Err(err) => self.error("Could not load sessions", err),
-        }
         match models {
             Ok(models) => self.emit(BackendEvent::Models(models)),
             Err(err) => self.error("Could not load models", err),
@@ -277,6 +271,9 @@ impl Inner {
         }
         self.load_mcp(&client).await;
         self.reload_snippets(client.directory());
+        if !self.tracked.is_empty() {
+            self.refresh_sessions(&client).await;
+        }
     }
 
     fn reload_snippets(&mut self, workspace: Option<&str>) {
@@ -286,6 +283,46 @@ impl Inner {
     }
 
     async fn handle(&mut self, action: Action) -> Control {
+        if let Action::SetTrackedProjects(projects) = &action {
+            let directories: HashSet<&str> = projects
+                .iter()
+                .map(|project| project.directory.as_str())
+                .collect();
+            self.cached_sessions
+                .retain(|directory, _| directories.contains(directory.as_str()));
+            self.tracked = projects.clone();
+            if let Some(client) = self.client.clone() {
+                self.refresh_sessions(&client).await;
+            }
+            return Control::Continue;
+        }
+        if let Action::AddProject { directory, name } = &action {
+            let directory = normalize_path(directory);
+            if directory.is_empty() || !Path::new(&directory).is_dir() {
+                self.emit(BackendEvent::Toast {
+                    kind: ToastKind::Error,
+                    message: "Project directory does not exist".into(),
+                });
+                return Control::Continue;
+            }
+            let name = name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string);
+            if !self
+                .tracked
+                .iter()
+                .any(|project| project.directory == directory)
+            {
+                self.tracked.push(TrackedProject {
+                    directory: directory.clone(),
+                    since: crate::state::now_ms(),
+                });
+            }
+            self.emit(BackendEvent::ProjectAdded { directory, name });
+            return Control::Continue;
+        }
         let Some(client) = self.client.clone() else {
             match action {
                 Action::Reconnect => return Control::Reconnect,
@@ -305,13 +342,7 @@ impl Inner {
             }
         };
         match action {
-            Action::RefreshSessions => {
-                self.refresh_sessions(&client).await;
-            }
-            Action::SearchSessions(query) => match client.search_sessions(&query).await {
-                Ok(sessions) => self.emit(BackendEvent::Sessions(sessions)),
-                Err(err) => self.error("Search failed", err),
-            },
+            Action::SetTrackedProjects(_) => {}
             Action::SelectSession(id) => {
                 self.activate(client, id).await;
             }
@@ -321,14 +352,31 @@ impl Inner {
                 files,
                 model,
                 agent,
+                allow_all,
             } => {
+                let permissions = allow_all.then(|| {
+                    serde_json::json!([
+                        { "action": "*", "resource": "*", "effect": "allow" }
+                    ])
+                });
                 match client
-                    .create_session(&directory, None, agent.as_deref(), model.as_ref())
+                    .create_session(
+                        &directory,
+                        None,
+                        agent.as_deref(),
+                        model.as_ref(),
+                        permissions.as_ref(),
+                    )
                     .await
                 {
-                    Ok(session) => {
+                    Ok(mut session) => {
                         let id = session.id.clone();
-                        self.known_sessions.insert(id.clone());
+                        mark_work_open(&mut session);
+                        if let Some(metadata) = session.metadata.clone()
+                            && let Err(err) = client.update_session_metadata(&id, metadata).await
+                        {
+                            self.error("Could not track session", err);
+                        }
                         self.emit(BackendEvent::SessionUpsert(Box::new(session)));
                         self.activate(client.clone(), id.clone()).await;
                         if let Some(prompt) = prompt.filter(|p| !p.trim().is_empty()) {
@@ -412,6 +460,101 @@ impl Inner {
                 }
                 Err(err) => self.error("Could not delete session", err),
             },
+            Action::SetSessionPinned { id, pinned } => {
+                self.set_session_metadata_flag(&client, &id, "pinned", pinned)
+                    .await;
+            }
+            Action::SetSessionWork { id, work } => {
+                self.set_session_metadata_flag(&client, &id, "work", work)
+                    .await;
+            }
+            Action::SetSessionPermissions { id, allow_all } => {
+                let permissions = if allow_all {
+                    serde_json::json!([
+                        { "action": "*", "resource": "*", "effect": "allow" }
+                    ])
+                } else {
+                    serde_json::json!([])
+                };
+                match client.update_session_permissions(&id, &permissions).await {
+                    Ok(()) => match client.get_session(&id).await {
+                        Ok(session) => {
+                            self.emit(BackendEvent::SessionUpsert(Box::new(session)));
+                        }
+                        Err(err) => self.error("Could not reload session", err),
+                    },
+                    Err(err) => self.error("Could not change permissions", err),
+                }
+            }
+            Action::MarkSessionViewed(id) => match view_session(&client, &id).await {
+                Ok(Some(idle)) => {
+                    self.emit(BackendEvent::SessionViewed { id, idle });
+                }
+                Ok(None) => {}
+                Err(err) => self.error("Could not mark session as viewed", err),
+            },
+            Action::MarkAllSessionsViewed(ids) => {
+                let mut failed = 0usize;
+                for id in ids.into_iter().take(2000) {
+                    match view_session(&client, &id).await {
+                        Ok(Some(idle)) => {
+                            self.emit(BackendEvent::SessionViewed { id, idle });
+                        }
+                        Ok(None) => {}
+                        Err(_) => failed += 1,
+                    }
+                }
+                if failed > 0 {
+                    self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Warning,
+                        message: format!("Could not mark {failed} sessions as viewed"),
+                    });
+                }
+            }
+            Action::MoveSession { id, directory } => {
+                if let Err(err) = client.move_session(&id, &directory).await {
+                    self.error("Could not move session", err);
+                } else {
+                    self.refresh_sessions(&client).await;
+                }
+            }
+            Action::ArchiveSessions { ids, archived } => {
+                let mut changed = false;
+                let mut failed = 0usize;
+                for id in ids {
+                    match client.archive_session(&id, archived).await {
+                        Ok(()) => changed = true,
+                        Err(_) => failed += 1,
+                    }
+                }
+                if failed > 0 {
+                    self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Warning,
+                        message: format!("Could not archive {failed} sessions"),
+                    });
+                }
+                if changed {
+                    self.schedule_sessions();
+                    self.emit(BackendEvent::Live(LiveEvent::SessionsDirty));
+                }
+            }
+            Action::DeleteSessions(ids) => {
+                let mut failed = 0usize;
+                for id in ids {
+                    match client.delete_session(&id).await {
+                        Ok(()) => self.emit(BackendEvent::SessionRemoved(id)),
+                        Err(_) => failed += 1,
+                    }
+                }
+                if failed > 0 {
+                    self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Warning,
+                        message: format!("Could not delete {failed} sessions"),
+                    });
+                }
+                self.schedule_sessions();
+            }
+            Action::AddProject { .. } => {}
             Action::SwitchModel { session_id, model } => {
                 match client.switch_model(&session_id, &model).await {
                     Ok(()) => {
@@ -452,32 +595,23 @@ impl Inner {
             },
             Action::SetWorkspace(directory) => {
                 self.config.workspace = Some(directory.clone());
-                let mut config = ClientConfig::from_url(client.base_url().clone());
-                config.password = self.password.clone();
-                config.directory = Some(directory.clone());
-                match Client::new(config) {
-                    Ok(new_client) => {
-                        self.client = Some(new_client);
-                        self.active = None;
-                        self.cursors.clear();
-                        self.emit(BackendEvent::WorkspaceChanged(directory.clone()));
-                        let directory_for_snippets = self
-                            .client
-                            .as_ref()
-                            .and_then(|client| client.directory())
-                            .map(str::to_string);
-                        self.reload_snippets(directory_for_snippets.as_deref());
-                        if let Some(client) = self.client.clone() {
-                            self.refresh_sessions(&client).await;
-                            match client.projects().await {
-                                Ok(projects) => self.emit(BackendEvent::Projects(projects)),
-                                Err(err) => self.error("Could not load projects", err),
-                            }
-                            self.load_mcp(&client).await;
-                        }
-                    }
-                    Err(err) => self.error("Could not switch workspace", err),
+                let mut next = client.clone();
+                next.set_directory(Some(directory.clone()));
+                self.client = Some(next.clone());
+                self.emit(BackendEvent::WorkspaceChanged(directory.clone()));
+                self.reload_snippets(next.directory());
+                self.refresh_sessions(&next).await;
+                match next.projects().await {
+                    Ok(projects) => self.emit(BackendEvent::Projects(projects)),
+                    Err(err) => self.error("Could not load projects", err),
                 }
+            }
+            Action::LoadSessionPreview(id) => {
+                let text = match client.list_messages(&id, 1).await {
+                    Ok(messages) => messages.last().map(preview_text).unwrap_or_default(),
+                    Err(_) => String::new(),
+                };
+                self.emit(BackendEvent::SessionPreview { id, text });
             }
             Action::LoadOlder(session_id) => {
                 let cursor = self.cursors.get(&session_id).cloned().flatten();
@@ -568,7 +702,6 @@ impl Inner {
         match client.get_session(&id).await {
             Ok(session) => {
                 self.active = Some(id.clone());
-                self.known_sessions.insert(id.clone());
                 self.emit(BackendEvent::SessionActivated(Box::new(session)));
             }
             Err(err) => {
@@ -606,6 +739,80 @@ impl Inner {
             Err(err) => self.error("Could not load changes", err),
         }
         self.refresh_inbox(&client, &id).await;
+    }
+
+    async fn set_session_metadata_flag(
+        &mut self,
+        client: &Client,
+        id: &str,
+        key: &str,
+        value: bool,
+    ) {
+        let mut session = match client.get_session(id).await {
+            Ok(session) => session,
+            Err(err) => {
+                self.error("Could not load session", err);
+                return;
+            }
+        };
+        let mut root = match session.metadata.take() {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let openchamber = root
+            .entry("openchamber")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !openchamber.is_object() {
+            *openchamber = Value::Object(Map::new());
+        }
+        if let Some(openchamber) = openchamber.as_object_mut() {
+            match key {
+                "pinned" if value => {
+                    openchamber.insert(
+                        "pinned".into(),
+                        serde_json::json!({ "at": crate::state::now_ms() }),
+                    );
+                }
+                "pinned" => {
+                    openchamber.remove("pinned");
+                }
+                "work" if value => {
+                    openchamber.insert(
+                        "work".into(),
+                        serde_json::json!({
+                            "state": "open",
+                            "openedAt": crate::state::now_ms(),
+                            "openedBy": "user",
+                        }),
+                    );
+                }
+                "work" => {
+                    openchamber.insert(
+                        "work".into(),
+                        serde_json::json!({
+                            "state": "done",
+                            "doneAt": crate::state::now_ms(),
+                        }),
+                    );
+                }
+                _ => {
+                    openchamber.insert(key.to_string(), Value::Bool(value));
+                }
+            }
+        }
+        let metadata = Value::Object(root);
+        session.metadata = Some(metadata.clone());
+        if let Err(err) = client.update_session_metadata(id, metadata).await {
+            self.error("Could not update session", err);
+            return;
+        }
+        match client.get_session(id).await {
+            Ok(updated) => self.emit(BackendEvent::SessionMetadataUpdated(Box::new(updated))),
+            Err(err) => {
+                self.emit(BackendEvent::SessionMetadataUpdated(Box::new(session)));
+                self.error("Could not reload session", err);
+            }
+        }
     }
 
     async fn reorder_inbox(&mut self, client: &Client, session_id: &str, inbox_ids: &[String]) {
@@ -699,29 +906,7 @@ impl Inner {
         }
     }
 
-    fn remember_sessions(&mut self, sessions: &[Session]) {
-        for session in sessions {
-            self.known_sessions.insert(session.id.clone());
-        }
-    }
-
     async fn event(&mut self, raw: RawEvent) {
-        if raw.system.is_none() {
-            let session_id = raw.data.get("sessionID").and_then(|value| value.as_str());
-            if let Some(session_id) = session_id {
-                let relevant = self.known_sessions.contains(session_id)
-                    || self.active.as_deref() == Some(session_id);
-                if !relevant {
-                    return;
-                }
-            }
-            if let Some(location) = &raw.location {
-                let directory = self.config.workspace.as_deref();
-                if directory.is_some_and(|directory| directory != location.directory) {
-                    return;
-                }
-            }
-        }
         let event = live::read(&raw);
         match &event {
             LiveEvent::TransportConnected => {
@@ -745,12 +930,11 @@ impl Inner {
             }
             LiveEvent::Execution {
                 session_id, state, ..
-            } if *state != ExecutionState::Started => {
-                self.schedule_sessions();
-                if self.active.as_deref() == Some(session_id.as_str()) {
-                    self.schedule_messages();
-                    self.schedule_inbox();
-                }
+            } if *state != ExecutionState::Started
+                && self.active.as_deref() == Some(session_id.as_str()) =>
+            {
+                self.schedule_messages();
+                self.schedule_inbox();
             }
             _ => {}
         }
@@ -773,7 +957,7 @@ impl Inner {
     }
 
     fn arm_flush(&mut self) {
-        self.arm_flush_in(Duration::from_millis(180));
+        self.arm_flush_in(Duration::from_millis(350));
     }
 
     fn arm_flush_in(&mut self, delay: Duration) {
@@ -818,18 +1002,55 @@ impl Inner {
     }
 
     async fn refresh_sessions(&mut self, client: &Client) {
-        let result = with_retry(|| {
-            let client = client.clone();
-            async move { client.list_sessions(100).await }
-        })
-        .await;
-        match result {
-            Ok(sessions) => {
-                self.remember_sessions(&sessions);
-                self.emit(BackendEvent::Sessions(sessions));
-            }
-            Err(err) => self.error("Could not refresh sessions", err),
+        if self.tracked.is_empty() {
+            self.cached_sessions.clear();
+            self.emit(BackendEvent::Sessions(Vec::new()));
+            return;
         }
+        let mut failures = 0usize;
+        for project in self.tracked.clone() {
+            let request = client.clone();
+            let directory = project.directory.clone();
+            let result = with_retry(|| {
+                let client = request.clone();
+                let directory = directory.clone();
+                async move {
+                    client
+                        .list_sessions_directory(&directory, SESSIONS_PER_PROJECT)
+                        .await
+                }
+            })
+            .await;
+            match result {
+                Ok(page) => {
+                    self.cached_sessions
+                        .insert(project.directory.clone(), page.data);
+                }
+                Err(_) => failures += 1,
+            }
+        }
+        let mut sessions = Vec::new();
+        let mut seen = HashSet::new();
+        for project in &self.tracked {
+            let Some(cached) = self.cached_sessions.get(&project.directory) else {
+                continue;
+            };
+            for session in cached {
+                if session.time.created + 1_000.0 < project.since {
+                    continue;
+                }
+                if seen.insert(session.id.clone()) {
+                    sessions.push(session.clone());
+                }
+            }
+        }
+        if failures > 0 {
+            self.emit(BackendEvent::Toast {
+                kind: ToastKind::Warning,
+                message: format!("Could not refresh {failures} project(s)"),
+            });
+        }
+        self.emit(BackendEvent::Sessions(sessions));
     }
 
     async fn load_mcp(&mut self, client: &Client) {
@@ -897,6 +1118,53 @@ impl Inner {
     }
 }
 
+fn preview_text(message: &Message) -> String {
+    let text = match message {
+        Message::User(message) => message.text.clone(),
+        Message::Assistant(message) => message
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                Part::Text(text) => Some(text.text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > 240 {
+        format!("{}…", text.chars().take(240).collect::<String>())
+    } else {
+        text
+    }
+}
+
+fn mark_work_open(session: &mut Session) {
+    let mut root = match session.metadata.take() {
+        Some(Value::Object(metadata)) => metadata,
+        _ => Map::new(),
+    };
+    let openchamber = root
+        .entry("openchamber")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !openchamber.is_object() {
+        *openchamber = Value::Object(Map::new());
+    }
+    if let Some(openchamber) = openchamber.as_object_mut() {
+        openchamber.insert(
+            "work".into(),
+            serde_json::json!({
+                "state": "open",
+                "openedAt": crate::state::now_ms(),
+                "openedBy": "auto",
+            }),
+        );
+    }
+    session.metadata = Some(Value::Object(root));
+}
+
 async fn with_retry<T, F, Fut>(mut call: F) -> Result<T, ApiError>
 where
     F: FnMut() -> Fut,
@@ -916,6 +1184,15 @@ where
     }
 }
 
+async fn view_session(client: &Client, id: &str) -> Result<Option<f64>, ApiError> {
+    let session = client.get_session(id).await?;
+    let Some(idle) = session.time.idle else {
+        return Ok(None);
+    };
+    client.view_session(id, idle).await?;
+    Ok(Some(idle))
+}
+
 fn event_kind(event: &BackendEvent) -> &'static str {
     match event {
         BackendEvent::Connection(_) => "connection",
@@ -932,6 +1209,10 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::Agents(_) => "agents",
         BackendEvent::Commands(_) => "commands",
         BackendEvent::Projects(_) => "projects",
+        BackendEvent::SessionMetadataUpdated(_) => "session-metadata-updated",
+        BackendEvent::SessionViewed { .. } => "session-viewed",
+        BackendEvent::SessionPreview { .. } => "session-preview",
+        BackendEvent::ProjectAdded { .. } => "project-added",
         BackendEvent::Permissions { .. } => "permissions",
         BackendEvent::Diff { .. } => "diff",
         BackendEvent::Vcs(_) => "vcs",
