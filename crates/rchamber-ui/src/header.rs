@@ -267,14 +267,7 @@ fn open_session_panel(ui: &mut crate::app::UiState) {
 }
 
 fn open_directory(directory: &str) {
-    let command = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    let _ = std::process::Command::new(command).arg(directory).spawn();
+    let _ = crate::widgets::reveal_in_finder(std::path::Path::new(directory));
 }
 
 fn usage(ui: &mut Ui, app: &mut RustChamber, p: &Palette, rect: Rect, reading: &Reading) {

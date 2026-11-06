@@ -119,14 +119,6 @@ impl Session {
             })
     }
 
-    pub fn set_allows_all(&mut self, allow_all: bool) {
-        self.permissions = allow_all.then(|| {
-            serde_json::json!([
-                { "action": "*", "resource": "*", "effect": "allow" }
-            ])
-        });
-    }
-
     pub fn is_busy(&self) -> bool {
         match (self.time.busy, self.time.idle) {
             (Some(busy), Some(idle)) => busy > idle,
@@ -901,9 +893,11 @@ mod tests {
         let mut session: Session =
             serde_json::from_str(r#"{"id":"ses_1","projectID":"p1","time":{}}"#).unwrap();
         assert!(!session.allows_all());
-        session.set_allows_all(true);
+        session.permissions = Some(serde_json::json!([
+            { "action": "*", "resource": "*", "effect": "allow" }
+        ]));
         assert!(session.allows_all());
-        session.set_allows_all(false);
+        session.permissions = None;
         assert!(!session.allows_all());
     }
 }

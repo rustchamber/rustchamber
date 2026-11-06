@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
+const CLONE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -354,6 +355,21 @@ pub fn clone_repo(url: &str, destination: &Path) -> Result<(), GitError> {
     if url.starts_with('-') || url.contains('\0') || url.contains('\n') || url.contains('\r') {
         return Err(GitError::Failed("repository URL is invalid".into()));
     }
+    if url.starts_with("http://") || url.starts_with("file://") {
+        return Err(GitError::Failed(
+            "repository URL must use HTTPS or SSH".into(),
+        ));
+    }
+    if let Some(rest) = url.strip_prefix("https://")
+        && rest
+            .split('/')
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    {
+        return Err(GitError::Failed(
+            "repository URL must not contain credentials".into(),
+        ));
+    }
     if destination.as_os_str().is_empty() {
         return Err(GitError::Failed("clone destination is empty".into()));
     }
@@ -407,7 +423,27 @@ pub fn clone_repo(url: &str, destination: &Path) -> Result<(), GitError> {
         .ok_or_else(|| GitError::Failed("git stderr is unavailable".into()))?;
     let out_reader = std::thread::spawn(move || read_stream(stdout));
     let err_reader = std::thread::spawn(move || read_stream(stderr));
-    let status = child.wait()?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= CLONE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_reader.join();
+                    let _ = err_reader.join();
+                    return Err(GitError::Timeout(CLONE_TIMEOUT.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(GitError::Failed(format!("git process error: {error}")));
+            }
+        }
+    };
     let stdout = out_reader.join().unwrap_or_default();
     let stderr = err_reader.join().unwrap_or_default();
     if status.success() {
@@ -504,9 +540,9 @@ fn run(repo: &Path, args: &[&str]) -> Result<String, GitError> {
     Err(GitError::Failed(message))
 }
 
-fn read_stream(mut stream: impl Read) -> String {
+fn read_stream(stream: impl Read) -> String {
     let mut buffer = Vec::new();
-    let _ = stream.read_to_end(&mut buffer);
+    let _ = stream.take(256 * 1024).read_to_end(&mut buffer);
     String::from_utf8_lossy(&buffer).to_string()
 }
 

@@ -122,22 +122,46 @@ impl Settings {
         let Some(path) = path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&path, text);
-            private_file(&path);
+            write_private(&path, &text);
         }
     }
 }
 
-fn private_file(path: &PathBuf) {
+fn write_private(path: &std::path::Path, text: &str) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let tmp = path.with_extension(format!("tmp-{}-{stamp}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let write = options.open(&tmp).and_then(|mut file| {
+        use std::io::Write;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()
+    });
+    if write.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    let _ = std::fs::rename(tmp, path);
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -166,15 +190,11 @@ pub fn save_drafts(drafts: &std::collections::HashMap<String, String>) {
     let Some(path) = drafts_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let store = DraftStore {
         drafts: drafts.clone(),
     };
     if let Ok(text) = serde_json::to_string_pretty(&store) {
-        let _ = std::fs::write(&path, text);
-        private_file(&path);
+        write_private(&path, &text);
     }
 }
 

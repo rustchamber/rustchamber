@@ -605,6 +605,21 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tint: Color32) -> Respons
     icon_button_hit(ui, icon, size, hit, tint)
 }
 
+#[cfg(target_os = "macos")]
+pub fn reveal_in_finder(path: &std::path::Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg("--")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn reveal_in_finder(path: &std::path::Path) -> std::io::Result<()> {
+    open::that_detached(path)
+}
+
 pub fn pointer(ui: &Ui, response: &Response) {
     if response.hovered() && ui.is_enabled() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

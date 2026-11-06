@@ -4,6 +4,7 @@ use rchamber_api::models::{
     FileDiff, FileEntry, McpServer, Model, ModelRef, PermissionRequest, Project, ServerInfo,
     Session, VcsInfo,
 };
+use serde_json::Value;
 
 #[derive(Clone, Debug)]
 pub struct TrackedProject {
@@ -71,10 +72,6 @@ pub enum Action {
         id: String,
         directory: String,
     },
-    AddProject {
-        directory: String,
-        name: Option<String>,
-    },
     ArchiveSessions {
         ids: Vec<String>,
         archived: bool,
@@ -140,10 +137,6 @@ pub enum BackendEvent {
     SessionPreview {
         id: String,
         text: String,
-    },
-    ProjectAdded {
-        directory: String,
-        name: Option<String>,
     },
     Permissions {
         session_id: String,
@@ -215,6 +208,10 @@ pub enum LiveEvent {
     SessionViewed {
         session_id: String,
         idle: f64,
+    },
+    SessionPermissions {
+        session_id: String,
+        permissions: Value,
     },
     SessionModel {
         session_id: String,

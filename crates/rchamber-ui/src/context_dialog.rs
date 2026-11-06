@@ -15,19 +15,20 @@ use crate::theme::{self, Palette};
 
 const CARD_RADIUS: u8 = 9;
 const ROW_RADIUS: u8 = 6;
-const ROW_HEIGHT: f32 = 24.0;
-const ROW_GAP: f32 = 2.0;
+const ROW_HEIGHT: f32 = 26.0;
+const ROW_GAP: f32 = 6.0;
 const CARD_GAP: f32 = 9.0;
 const SECTION_GAP: f32 = 14.0;
 const TOP_PAD: f32 = 12.0;
 const SIDE_PAD: f32 = 12.0;
 const BOTTOM_PAD: f32 = 14.0;
 const CONTEXT_CARD: f32 = 74.0;
-const STAT_CARD: f32 = 50.0;
-const TOKENS_CARD: f32 = 90.0;
+const STAT_CARD: f32 = 56.0;
+const TOKENS_CARD: f32 = 108.0;
 const BAR_HEIGHT: f32 = 6.0;
-const LEGEND_HEIGHT: f32 = 16.0;
-const LEGEND_GAP: f32 = 14.0;
+const LEGEND_HEIGHT: f32 = 17.0;
+const LEGEND_ROW_GAP: f32 = 5.0;
+const LEGEND_GAP: f32 = 16.0;
 const LEGEND_DOT: f32 = 6.0;
 const LEGEND_TEXT_GAP: f32 = 4.0;
 const RAW_LABEL_HEIGHT: f32 = 20.0;
@@ -381,8 +382,8 @@ fn stat_card(ui: &mut Ui, p: &Palette, width: f32, label: &str, value: &str) {
     ui.painter()
         .rect_filled(rect, CornerRadius::same(CARD_RADIUS), p.card);
     let inner = Rect::from_min_max(
-        Pos2::new(rect.left() + 12.0, rect.top() + 10.0),
-        Pos2::new(rect.right() - 12.0, rect.bottom() - 9.0),
+        Pos2::new(rect.left() + 12.0, rect.top() + 11.0),
+        Pos2::new(rect.right() - 12.0, rect.bottom() - 10.0),
     );
     ui.painter().text(
         inner.left_top(),
@@ -445,7 +446,7 @@ fn tokens_card(ui: &mut Ui, p: &Palette, view: &View) {
         let column = index % 3;
         let row = index / 3;
         let x = rect.left() + 12.0 + column as f32 * (cell_width + gap);
-        let y = rect.top() + 32.0 + row as f32 * 26.0;
+        let y = rect.top() + 35.0 + row as f32 * 33.0;
         ui.painter().text(
             Pos2::new(x, y),
             Align2::LEFT_TOP,
@@ -454,7 +455,7 @@ fn tokens_card(ui: &mut Ui, p: &Palette, view: &View) {
             p.fg_muted,
         );
         ui.painter().text(
-            Pos2::new(x, y + 12.0),
+            Pos2::new(x, y + 17.0),
             Align2::LEFT_TOP,
             value,
             theme::font_mono(12.0),
@@ -483,7 +484,8 @@ fn breakdown(ui: &mut Ui, p: &Palette, split: &[f32; 4]) {
         galleys.push(galley);
     }
     let rows = pack_rows(&widths, width, LEGEND_GAP);
-    let height = BAR_HEIGHT + 8.0 + rows.len().max(1) as f32 * LEGEND_HEIGHT;
+    let row_count = rows.len().max(1) as f32;
+    let height = BAR_HEIGHT + 10.0 + row_count * LEGEND_HEIGHT + (row_count - 1.0) * LEGEND_ROW_GAP;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), BAR_HEIGHT));
     ui.painter()
@@ -533,7 +535,7 @@ fn breakdown(ui: &mut Ui, p: &Palette, split: &[f32; 4]) {
         x += segment_width;
     }
 
-    let mut y = rect.top() + BAR_HEIGHT + 8.0;
+    let mut y = rect.top() + BAR_HEIGHT + 10.0;
     for row in &rows {
         let mut cursor = rect.left();
         for index in row {
@@ -552,7 +554,7 @@ fn breakdown(ui: &mut Ui, p: &Palette, split: &[f32; 4]) {
             );
             cursor += widths[*index] + LEGEND_GAP;
         }
-        y += LEGEND_HEIGHT;
+        y += LEGEND_HEIGHT + LEGEND_ROW_GAP;
     }
 }
 

@@ -31,7 +31,6 @@ pub struct DisplayPrefs {
     pub grouping: SessionGrouping,
     pub project_sort: ProjectSort,
     pub detailed_rows: bool,
-    pub branch_names: bool,
     pub show_projects: bool,
     pub show_chats: bool,
     pub show_in_progress: bool,
@@ -43,7 +42,6 @@ impl Default for DisplayPrefs {
             grouping: SessionGrouping::Project,
             project_sort: ProjectSort::Manual,
             detailed_rows: false,
-            branch_names: true,
             show_projects: true,
             show_chats: true,
             show_in_progress: true,
@@ -58,9 +56,7 @@ pub struct ProjectEntry {
     pub name: String,
     pub name_override: Option<String>,
     pub color: Option<String>,
-    pub icon: Option<String>,
     pub hidden: bool,
-    pub collapsed: bool,
     pub added_at: f64,
 }
 
@@ -76,7 +72,6 @@ pub struct SessionFolder {
     pub project_id: String,
     pub name: String,
     pub collapsed: bool,
-    pub created_at: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,17 +89,9 @@ pub struct WorkspaceStore {
     #[serde(default)]
     pub active_project_id: Option<String>,
     #[serde(default)]
-    pub last_session_id: Option<String>,
-    #[serde(default)]
-    pub last_session_by_project: HashMap<String, String>,
-    #[serde(default)]
     pub new_session_drafts: HashMap<String, String>,
     #[serde(default)]
-    pub allow_all_new_sessions: bool,
-    #[serde(default)]
     pub collapsed_projects: HashSet<String>,
-    #[serde(default)]
-    pub closed_projects: HashSet<String>,
     #[serde(default)]
     pub collapsed_sections: HashSet<String>,
     #[serde(default)]
@@ -122,12 +109,8 @@ impl Default for WorkspaceStore {
             folder_sessions: HashMap::new(),
             order: Vec::new(),
             active_project_id: None,
-            last_session_id: None,
-            last_session_by_project: HashMap::new(),
             new_session_drafts: HashMap::new(),
-            allow_all_new_sessions: false,
             collapsed_projects: HashSet::new(),
-            closed_projects: HashSet::new(),
             collapsed_sections: HashSet::new(),
             hidden_sections: Vec::new(),
             display: DisplayPrefs::default(),
@@ -162,7 +145,15 @@ impl WorkspaceStore {
             Err(_) => return Self::default(),
         };
         match serde_json::from_str::<Self>(&text) {
-            Ok(store) => accept_version(store).unwrap_or_default(),
+            Ok(store) => match accept_version(store) {
+                Some(store) => store,
+                None => {
+                    let backup =
+                        path.with_file_name(format!("workspace.future-{}.json", now_ms() as u64));
+                    let _ = std::fs::copy(path, backup);
+                    Self::default()
+                }
+            },
             Err(_) => {
                 let corrupt = corrupt_path(path);
                 let _ = std::fs::rename(path, corrupt);
@@ -187,6 +178,11 @@ impl WorkspaceStore {
         if std::fs::create_dir_all(parent).is_err() {
             return;
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
         let Ok(text) = serde_json::to_string_pretty(self) else {
             return;
         };
@@ -195,16 +191,18 @@ impl WorkspaceStore {
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
         let tmp = path.with_extension(format!("json.tmp-{}-{stamp}", std::process::id()));
-        let write = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)
-            .and_then(|mut file| {
-                use std::io::Write;
-                file.write_all(text.as_bytes())?;
-                file.sync_all()
-            });
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let write = options.open(&tmp).and_then(|mut file| {
+            use std::io::Write;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        });
         if write.is_err() {
             let _ = std::fs::remove_file(&tmp);
             return;
@@ -219,7 +217,6 @@ impl WorkspaceStore {
 
     pub fn add_local_project(&mut self, directory: &str, name: Option<&str>) -> String {
         let canonical = normalize_path(directory);
-        self.closed_projects.remove(&canonical);
         let name = name
             .map(str::trim)
             .filter(|name| !name.is_empty())
@@ -242,9 +239,7 @@ impl WorkspaceStore {
             name,
             name_override: None,
             color: None,
-            icon: None,
             hidden: false,
-            collapsed: false,
             added_at: now_ms(),
         });
         self.order.push(id.clone());
@@ -252,9 +247,6 @@ impl WorkspaceStore {
     }
 
     pub fn remove_project(&mut self, id: &str) {
-        if let Some(project) = self.projects.iter().find(|project| project.id == id) {
-            self.closed_projects.insert(project.canonical.clone());
-        }
         let folder_ids: Vec<String> = self
             .folders
             .iter()
@@ -267,7 +259,6 @@ impl WorkspaceStore {
         self.projects.retain(|project| project.id != id);
         self.order.retain(|project| project != id);
         self.collapsed_projects.remove(id);
-        self.last_session_by_project.remove(id);
         if self.active_project_id.as_deref() == Some(id) {
             self.active_project_id = None;
         }
@@ -295,7 +286,6 @@ impl WorkspaceStore {
                 name.to_string()
             },
             collapsed: false,
-            created_at: now_ms(),
         });
         id
     }
@@ -434,14 +424,6 @@ impl WorkspaceStore {
         let directory = session.directory()?;
         self.project_for_directory(directory)
     }
-
-    pub fn note_session(&mut self, session: &rchamber_api::models::Session) {
-        self.last_session_id = Some(session.id.clone());
-        if let Some(project) = self.project_for_session(session) {
-            let id = project.id.clone();
-            self.last_session_by_project.insert(id, session.id.clone());
-        }
-    }
 }
 
 pub fn normalize_path(path: &str) -> String {
@@ -463,16 +445,7 @@ pub fn normalize_path(path: &str) -> String {
 }
 
 pub fn paths_match(left: &str, right: &str) -> bool {
-    if normalize_path(left) == normalize_path(right) {
-        return true;
-    }
-    match (
-        Path::new(left).canonicalize(),
-        Path::new(right).canonicalize(),
-    ) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
+    normalize_path(left) == normalize_path(right)
 }
 
 fn directory_name(path: &str) -> String {
@@ -512,9 +485,7 @@ mod tests {
             name: name.into(),
             name_override: None,
             color: None,
-            icon: None,
             hidden: false,
-            collapsed: false,
             added_at,
         }
     }
@@ -527,10 +498,6 @@ mod tests {
             .push(entry("p1", "/tmp/alpha", "Alpha", 10.0));
         store.order.push("p1".into());
         store.active_project_id = Some("p1".into());
-        store.last_session_id = Some("ses_1".into());
-        store
-            .last_session_by_project
-            .insert("p1".into(), "ses_1".into());
         store.new_session_drafts.insert("p1".into(), "draft".into());
         store.collapsed_projects.insert("p1".into());
         store.collapsed_sections.insert("pinned".into());
@@ -545,14 +512,6 @@ mod tests {
         assert_eq!(restored.projects.len(), 1);
         assert_eq!(restored.order, vec!["p1"]);
         assert_eq!(restored.active_project_id.as_deref(), Some("p1"));
-        assert_eq!(restored.last_session_id.as_deref(), Some("ses_1"));
-        assert_eq!(
-            restored
-                .last_session_by_project
-                .get("p1")
-                .map(String::as_str),
-            Some("ses_1")
-        );
         assert_eq!(
             restored.new_session_drafts.get("p1").map(String::as_str),
             Some("draft")
@@ -614,7 +573,6 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(store.folders[0].name, "Alpha");
         assert_eq!(store.folders[0].project_id, "p1");
-        assert!(store.folders[0].created_at > 0.0);
         let ids: Vec<&str> = store
             .folders_for_project("p1")
             .into_iter()

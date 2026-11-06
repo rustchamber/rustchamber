@@ -27,6 +27,10 @@ pub fn read(event: &RawEvent) -> LiveEvent {
                 LiveEvent::SessionsDirty
             }
         }
+        "session.permissions" => LiveEvent::SessionPermissions {
+            session_id: string(data, "sessionID").unwrap_or_default(),
+            permissions: data.get("permissions").cloned().unwrap_or(Value::Null),
+        },
         "session.renamed" => LiveEvent::SessionRenamed {
             session_id: string(data, "sessionID").unwrap_or_default(),
             title: string(data, "title").unwrap_or_default(),

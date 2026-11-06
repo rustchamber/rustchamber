@@ -156,7 +156,10 @@ after a project was added with the current installation.
 The shield in the composer toggles the active session between **ask always** and
 **allow all**. The choice is written to OpenCode's session permission rules, so it survives
 restarts and is visible to other clients. A new session inherits the last mode chosen in the
-new-session composer; the default is ask.
+new-session composer for the rest of the run; the default is ask on every launch.
+
+Allow all is intentionally broad: it overrides agent-level restrictions for that session and
+is inherited by its subagents and forks. Enable it only for a workspace you trust.
 
 Useful environment variables:
 

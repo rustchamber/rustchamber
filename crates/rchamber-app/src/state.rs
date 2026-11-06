@@ -333,20 +333,6 @@ impl AppModel {
                 {
                     chat.session = session.clone();
                 }
-                let active_id = self.active.as_ref().map(|chat| chat.session.id.clone());
-                if let Some(active_id) = active_id
-                    && let Some(session) =
-                        self.sessions.iter().find(|session| session.id == active_id)
-                {
-                    let previous = self.workspace_store.last_session_id.clone();
-                    let previous_by_project = self.workspace_store.last_session_by_project.clone();
-                    self.workspace_store.note_session(session);
-                    if self.workspace_store.last_session_id != previous
-                        || self.workspace_store.last_session_by_project != previous_by_project
-                    {
-                        self.workspace_store.save();
-                    }
-                }
             }
             BackendEvent::SessionUpsert(session) => {
                 let session = *session;
@@ -365,7 +351,6 @@ impl AppModel {
                 chat.draft = draft;
                 chat.model = session.model.clone();
                 chat.agent = session.agent.clone();
-                self.workspace_store.note_session(&session);
                 if let Some(project) = self.workspace_store.project_for_session(&session) {
                     let project_id = project.id.clone();
                     self.workspace_store.mark_active_project(&project_id);
@@ -376,16 +361,7 @@ impl AppModel {
                 self.composer_focus = true;
             }
             BackendEvent::SessionRemoved(id) => {
-                self.sessions.retain(|s| s.id != id);
-                self.session_previews.remove(&id);
-                self.preview_pending.remove(&id);
-                if self
-                    .active
-                    .as_ref()
-                    .is_some_and(|chat| chat.session.id == id)
-                {
-                    self.active = None;
-                }
+                self.remove_session_local(&id);
             }
             BackendEvent::Messages {
                 session_id,
@@ -453,11 +429,6 @@ impl AppModel {
             BackendEvent::SessionPreview { id, text } => {
                 self.preview_pending.remove(&id);
                 self.session_previews.insert(id, text);
-            }
-            BackendEvent::ProjectAdded { directory, name } => {
-                self.workspace_store
-                    .add_local_project(&directory, name.as_deref());
-                self.workspace_store.save();
             }
             BackendEvent::Permissions {
                 session_id,
@@ -537,14 +508,7 @@ impl AppModel {
             }
             LiveEvent::SessionsDirty => {}
             LiveEvent::SessionDeleted { session_id } => {
-                self.sessions.retain(|s| s.id != session_id);
-                if self
-                    .active
-                    .as_ref()
-                    .is_some_and(|c| c.session.id == session_id)
-                {
-                    self.active = None;
-                }
+                self.remove_session_local(&session_id);
             }
             LiveEvent::SessionRenamed { session_id, title } => {
                 if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
@@ -554,6 +518,31 @@ impl AppModel {
                     && chat.session.id == session_id
                 {
                     chat.session.title = Some(title);
+                }
+            }
+            LiveEvent::SessionPermissions {
+                session_id,
+                permissions,
+            } => {
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
+                    session.permissions = if permissions.is_null() {
+                        None
+                    } else {
+                        Some(permissions.clone())
+                    };
+                }
+                if let Some(chat) = &mut self.active
+                    && chat.session.id == session_id
+                {
+                    chat.session.permissions = if permissions.is_null() {
+                        None
+                    } else {
+                        Some(permissions)
+                    };
                 }
             }
             LiveEvent::SessionViewed { session_id, idle } => {
@@ -942,31 +931,10 @@ impl AppModel {
         sessions
     }
 
-    pub fn active_sessions(&self) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|session| session.time.archived.is_none())
-            .collect()
-    }
-
     pub fn archived_sessions(&self) -> Vec<&Session> {
         self.sessions
             .iter()
             .filter(|session| session.time.archived.is_some())
-            .collect()
-    }
-
-    pub fn root_sessions(&self) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|session| session.time.archived.is_none() && session.parent_id.is_none())
-            .collect()
-    }
-
-    pub fn children_of(&self, id: &str) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|session| session.parent_id.as_deref() == Some(id))
             .collect()
     }
 
@@ -979,13 +947,6 @@ impl AppModel {
                         .directory()
                         .is_some_and(|directory| paths_match(directory, &project.canonical))
             })
-            .collect()
-    }
-
-    pub fn sessions_without_project(&self) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|session| self.workspace_store.project_for_session(session).is_none())
             .collect()
     }
 
@@ -1131,6 +1092,23 @@ impl AppModel {
         }
     }
 
+    fn remove_session_local(&mut self, id: &str) {
+        self.sessions.retain(|session| session.id != id);
+        self.session_previews.remove(id);
+        self.preview_pending.remove(id);
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|chat| chat.session.id == id)
+        {
+            self.active = None;
+        }
+        if self.workspace_store.folder_for_session(id).is_some() {
+            self.workspace_store.unassign_session(id);
+            self.workspace_store.save();
+        }
+    }
+
     fn update_session_local(&mut self, id: &str, mut update: impl FnMut(&mut Session)) {
         if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) {
             update(session);
@@ -1173,21 +1151,6 @@ impl AppModel {
             .iter()
             .filter(|agent| !agent.hidden && (agent.mode == "primary" || agent.mode == "all"))
             .collect()
-    }
-
-    pub fn workspace_name(&self) -> String {
-        let path = self
-            .active
-            .as_ref()
-            .and_then(|chat| chat.session.directory())
-            .or(self.workspace.as_deref());
-        path.map(|p| {
-            std::path::Path::new(p)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.to_string())
-        })
-        .unwrap_or_else(|| "RustChamber".into())
     }
 
     pub fn active_id(&self) -> Option<&str> {
@@ -1491,38 +1454,15 @@ mod tests {
     }
 
     #[test]
-    fn global_session_helpers_cover_directories_children_and_archive() {
+    fn session_snapshot_separates_archived_sessions() {
         let model = model(vec![
             session("r1", None, "p1", "/tmp/alpha", false, 10.0, None),
             session("c1", Some("r1"), "p1", "/tmp/alpha", false, 11.0, None),
-            session("c2", Some("c1"), "p1", "/tmp/alpha", false, 12.0, None),
-            session("r2", None, "p2", "/tmp/beta", false, 13.0, None),
-            session("r3", None, "p3", "/tmp/gamma", false, 14.0, None),
             session("r4", None, "p3", "/tmp/gamma", true, 15.0, None),
         ]);
 
-        assert_eq!(model.sessions.len(), 6);
-        assert_eq!(model.active_sessions().len(), 5);
+        assert_eq!(model.sessions.len(), 3);
         assert_eq!(model.archived_sessions().len(), 1);
-        let roots: Vec<&str> = model
-            .root_sessions()
-            .into_iter()
-            .map(|session| session.id.as_str())
-            .collect();
-        assert_eq!(roots, vec!["r1", "r2", "r3"]);
-        let children: Vec<&str> = model
-            .children_of("r1")
-            .into_iter()
-            .map(|session| session.id.as_str())
-            .collect();
-        assert_eq!(children, vec!["c1"]);
-        let grandchildren: Vec<&str> = model
-            .children_of("c1")
-            .into_iter()
-            .map(|session| session.id.as_str())
-            .collect();
-        assert_eq!(grandchildren, vec!["c2"]);
-        assert_eq!(model.sessions_without_project().len(), 6);
     }
 
     #[test]
@@ -1551,7 +1491,6 @@ mod tests {
         assert_eq!(owned, vec!["r1", "c1"]);
         assert!(model.is_unread(&model.sessions[0]));
         assert!(!model.is_unread(&model.sessions[1]));
-        assert_eq!(model.sessions_without_project().len(), 0);
 
         model.mark_viewed_local("r1", 20.0);
         assert!(!model.is_unread(&model.sessions[0]));

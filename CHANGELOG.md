@@ -15,6 +15,9 @@
   HTTP 400.
 - Added pointer cursors to menu rows, settings navigation, palette entries, and other
   buttons that were missing them.
+- Security: settings, workspace and draft files are written atomically with private
+  permissions; project reveals use Finder reveal instead of launching app bundles; clone
+  URLs reject HTTP and embedded credentials; git output is bounded.
 
 ## 0.2.4-beta
 

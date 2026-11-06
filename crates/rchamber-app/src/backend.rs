@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +15,6 @@ use crate::action::{
 };
 use crate::live;
 use crate::snippets;
-use crate::workspace::normalize_path;
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
@@ -207,7 +205,7 @@ impl Inner {
         let Some(client) = self.client.clone() else {
             return;
         };
-        tracing::debug!("bootstrapping from {}", client.base_url());
+        tracing::debug!("bootstrapping OpenCode client");
         let models = with_retry(|| {
             let client = client.clone();
             async move { client.models().await }
@@ -294,33 +292,6 @@ impl Inner {
             if let Some(client) = self.client.clone() {
                 self.refresh_sessions(&client).await;
             }
-            return Control::Continue;
-        }
-        if let Action::AddProject { directory, name } = &action {
-            let directory = normalize_path(directory);
-            if directory.is_empty() || !Path::new(&directory).is_dir() {
-                self.emit(BackendEvent::Toast {
-                    kind: ToastKind::Error,
-                    message: "Project directory does not exist".into(),
-                });
-                return Control::Continue;
-            }
-            let name = name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string);
-            if !self
-                .tracked
-                .iter()
-                .any(|project| project.directory == directory)
-            {
-                self.tracked.push(TrackedProject {
-                    directory: directory.clone(),
-                    since: crate::state::now_ms(),
-                });
-            }
-            self.emit(BackendEvent::ProjectAdded { directory, name });
             return Control::Continue;
         }
         let Some(client) = self.client.clone() else {
@@ -554,7 +525,6 @@ impl Inner {
                 }
                 self.schedule_sessions();
             }
-            Action::AddProject { .. } => {}
             Action::SwitchModel { session_id, model } => {
                 match client.switch_model(&session_id, &model).await {
                     Ok(()) => {
@@ -1212,7 +1182,6 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::SessionMetadataUpdated(_) => "session-metadata-updated",
         BackendEvent::SessionViewed { .. } => "session-viewed",
         BackendEvent::SessionPreview { .. } => "session-preview",
-        BackendEvent::ProjectAdded { .. } => "project-added",
         BackendEvent::Permissions { .. } => "permissions",
         BackendEvent::Diff { .. } => "diff",
         BackendEvent::Vcs(_) => "vcs",

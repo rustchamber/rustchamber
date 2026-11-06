@@ -615,19 +615,6 @@ impl Client {
         self.get("/api/project").await
     }
 
-    pub async fn update_project(&self, id: &str, title: Option<&str>) -> Result<Project, ApiError> {
-        #[derive(Serialize)]
-        struct Body<'a> {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            name: Option<&'a str>,
-        }
-        self.send(
-            self.request(reqwest::Method::PATCH, &format!("/api/project/{id}"))
-                .json(&Body { name: title }),
-        )
-        .await
-    }
-
     pub async fn vcs_info(&self) -> Result<VcsInfo, ApiError> {
         let envelope: Data<VcsInfo> = self.get("/api/vcs").await?;
         Ok(envelope.data)

@@ -1668,10 +1668,7 @@ fn composer_footer(
                     let next = !allow_all;
                     if home {
                         app.ui.home_allow_all = next;
-                        app.model.workspace_store.allow_all_new_sessions = next;
-                        app.model.workspace_store.save();
-                    } else if let Some(chat) = &mut app.model.active {
-                        chat.session.set_allows_all(next);
+                    } else if let Some(chat) = &app.model.active {
                         actions.push(Action::SetSessionPermissions {
                             id: chat.session.id.clone(),
                             allow_all: next,

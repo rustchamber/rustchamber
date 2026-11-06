@@ -64,7 +64,6 @@ const SHOW_MORE_HEIGHT: f32 = 28.0;
 const BOTTOM_GAP: f32 = 8.0;
 const MAX_VISIBLE_ROOTS: usize = 7;
 const BULK_HEIGHT: f32 = 38.0;
-const CHATS_SCOPE: &str = "chats";
 const PROJECT_PALETTE: [u32; 8] = [
     0x3B82F6, 0x22C55E, 0xA855F7, 0xF97316, 0x14B8A6, 0xEC4899, 0xEAB308, 0x6366F1,
 ];
@@ -149,7 +148,8 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     };
     let folders = app.model.workspace_store.folders.clone();
     let folder_sessions = app.model.workspace_store.folder_sessions.clone();
-    let chats_layout = partition_folders(&folders, &folder_sessions, CHATS_SCOPE, &chats);
+    let chats_layout =
+        partition_folders(&folders, &folder_sessions, crate::app::CHATS_TARGET, &chats);
 
     let stored_active = app
         .model
@@ -157,29 +157,18 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         .active_project_id
         .clone()
         .filter(|id| projects.iter().any(|project| &project.id == id));
-    let chats_active = app.model.workspace_store.active_project_id.as_deref() == Some(CHATS_SCOPE);
     let workspace_project = app.model.workspace.as_deref().and_then(|directory| {
         projects
             .iter()
             .find(|project| paths_match(&project.canonical, directory))
             .map(|project| project.id.clone())
     });
-    let active_project_id = if chats_active {
-        None
-    } else {
-        stored_active.or(workspace_project)
-    };
+    let active_project_id = stored_active.or(workspace_project);
     let active_project = active_project_id
         .as_ref()
         .and_then(|id| projects.iter().find(|project| &project.id == id))
         .cloned()
-        .or_else(|| {
-            if chats_active {
-                None
-            } else {
-                projects.first().cloned()
-            }
-        });
+        .or_else(|| projects.first().cloned());
 
     let projects_with_sessions: HashSet<String> = sessions
         .iter()
@@ -368,7 +357,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                         app.begin_new_session(Some(crate::app::CHATS_TARGET.to_string()));
                     }
                     if new_folder {
-                        app.ui.new_folder = Some(CHATS_SCOPE.to_string());
+                        app.ui.new_folder = Some(crate::app::CHATS_TARGET.to_string());
                         app.ui.new_folder_name.clear();
                     }
                     let collapsed = app
@@ -444,24 +433,12 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                         .collapsed_projects
                         .contains(&project.id);
                     let active = active_project_id.as_deref() == Some(project.id.as_str());
-                    let event = project_header(
-                        ui,
-                        app,
-                        &p,
-                        project,
-                        collapsed,
-                        active,
-                        !display.show_projects,
-                    );
+                    let event = project_header(ui, app, &p, project, collapsed, active);
                     if event.toggle {
                         set_project_collapsed(app, &project.id, !collapsed);
                     }
                     if event.add {
                         app.begin_new_session(Some(project.id.clone()));
-                    }
-                    if event.picker {
-                        app.ui.project_picker_open = true;
-                        app.ui.project_picker_query.clear();
                     }
 
                     let collapsed = app
@@ -762,21 +739,6 @@ fn display_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         if response.clicked() {
             app.model.workspace_store.display.detailed_rows =
                 !app.model.workspace_store.display.detailed_rows;
-            app.model.workspace_store.save();
-        }
-        items.push(response);
-        let response = crate::widgets::menu_item_ex(
-            ui,
-            "Name worktrees by branch",
-            Some(Icon::Branch),
-            None,
-            app.model.workspace_store.display.branch_names,
-            true,
-            p,
-        );
-        if response.clicked() {
-            app.model.workspace_store.display.branch_names =
-                !app.model.workspace_store.display.branch_names;
             app.model.workspace_store.save();
         }
         items.push(response);
@@ -1095,7 +1057,6 @@ fn layout_height(
     height
 }
 
-#[allow(clippy::too_many_arguments)]
 fn folder_layout(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -1136,7 +1097,6 @@ fn folder_layout(
     ListOutcome { select, show_all }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn folder_section(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -1407,7 +1367,6 @@ fn project_header(
     project: &ProjectEntry,
     collapsed: bool,
     active: bool,
-    picker_mode: bool,
 ) -> ProjectEvent {
     let (slot, _) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), PROJECT_SLOT),
@@ -1527,7 +1486,7 @@ fn project_header(
     );
     icons::paint(
         ui,
-        if collapsed && !picker_mode {
+        if collapsed {
             Icon::ChevronRight
         } else {
             Icon::ChevronDown
@@ -1547,8 +1506,7 @@ fn project_header(
     let add_clicked = plus.clicked();
     let header_clicked = response.clicked() && !menu_clicked && !add_clicked;
     ProjectEvent {
-        toggle: header_clicked && !picker_mode,
-        picker: header_clicked && picker_mode,
+        toggle: header_clicked,
         add: add_clicked,
     }
 }
@@ -1556,7 +1514,6 @@ fn project_header(
 #[derive(Default)]
 struct ProjectEvent {
     toggle: bool,
-    picker: bool,
     add: bool,
 }
 
@@ -1591,7 +1548,9 @@ fn project_menu(
         let response =
             crate::widgets::menu_item(ui, "Show in Finder", Some(Icon::FolderOpen), None, p);
         if response.clicked() {
-            if let Err(error) = open::that(&project.canonical) {
+            if let Err(error) =
+                crate::widgets::reveal_in_finder(std::path::Path::new(&project.canonical))
+            {
                 app.model
                     .toast(ToastKind::Error, format!("Could not open folder: {error}"));
             }
@@ -1857,7 +1816,6 @@ struct RowEvent {
     toggle: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn session_row(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -2337,7 +2295,6 @@ struct ListOutcome {
     show_all: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn root_list(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -2395,7 +2352,6 @@ fn root_list(
     ListOutcome { select, show_all }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_children(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -3399,7 +3355,6 @@ fn project_hash(id: &str) -> usize {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn dialogs(ctx: &egui::Context, app: &mut RustChamber) {
     customize_dialog(ctx, app);
     archive_dialog(ctx, app);
@@ -3745,7 +3700,7 @@ fn new_folder_dialog(ctx: &egui::Context, app: &mut RustChamber) {
         return;
     };
     let p = app.palette.clone();
-    let scope = if project_id == CHATS_SCOPE {
+    let scope = if project_id == crate::app::CHATS_TARGET {
         "Chats".to_string()
     } else {
         app.model
@@ -3953,8 +3908,8 @@ fn move_to_folder_dialog(ctx: &egui::Context, app: &mut RustChamber) {
         .model
         .project_for_session(&session)
         .map(|project| project.id.clone())
-        .unwrap_or_else(|| CHATS_SCOPE.to_string());
-    let scope_label = if scope == CHATS_SCOPE {
+        .unwrap_or_else(|| crate::app::CHATS_TARGET.to_string());
+    let scope_label = if scope == crate::app::CHATS_TARGET {
         "Chats".to_string()
     } else {
         app.model
@@ -4147,10 +4102,8 @@ fn delete_dialog(ctx: &egui::Context, app: &mut RustChamber) {
     if confirm {
         app.model
             .forget_sessions_from_folders(std::slice::from_ref(&id));
+        app.ui.selected_sessions.remove(&id);
         app.backend.send(Action::DeleteSession(id));
-        app.ui
-            .selected_sessions
-            .remove(&app.ui.confirm_delete.clone().unwrap_or_default());
         app.ui.confirm_delete = None;
         app.model.toast(ToastKind::Success, "Session deleted");
     } else if !open {
@@ -4537,7 +4490,6 @@ mod tests {
             project_id: "project".into(),
             name: name.into(),
             collapsed,
-            created_at: 1.0,
         }
     }
 
@@ -4650,9 +4602,7 @@ mod tests {
             name: "Alpha".into(),
             name_override: None,
             color: None,
-            icon: None,
             hidden: false,
-            collapsed: false,
             added_at: 1.0,
         };
         assert_eq!(project_color(&project, &p), project_color(&project, &p));

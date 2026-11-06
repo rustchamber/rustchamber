@@ -7,8 +7,8 @@ use eframe::egui::{
     RichText, ScrollArea, Sense, Stroke, TextStyle, Ui, UiBuilder, Vec2, WidgetText,
 };
 use rchamber_api::models::Project;
+use rchamber_app::ToastKind;
 use rchamber_app::workspace::{ProjectEntry, paths_match};
-use rchamber_app::{Action, ToastKind};
 use rchamber_git::repo;
 
 use crate::app::RustChamber;
@@ -272,15 +272,12 @@ pub fn is_valid_repo_url(url: &str) -> bool {
     {
         return false;
     }
-    if let Some(rest) = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-    {
+    if let Some(rest) = url.strip_prefix("https://") {
         let rest = rest.trim_end_matches('/');
         let Some((host, path)) = rest.split_once('/') else {
             return false;
         };
-        return !host.is_empty() && !path.trim_matches('/').is_empty();
+        return !host.is_empty() && !host.contains('@') && !path.trim_matches('/').is_empty();
     }
     if let Some(rest) = url.strip_prefix("ssh://") {
         let rest = rest.trim_end_matches('/');
@@ -357,6 +354,7 @@ fn load_listing(path: &Path, projects: &[ProjectEntry]) -> Vec<DirEntry> {
             .cmp(&right.name.to_lowercase())
             .then_with(|| left.name.cmp(&right.name))
     });
+    directories.truncate(500);
     directories
 }
 
@@ -1224,7 +1222,7 @@ fn footer(
                 p,
             )
             .clicked()
-            && let Err(error) = open::that(&path)
+            && let Err(error) = widgets::reveal_in_finder(&path)
         {
             outcome.open_failed = Some(format!("Could not open folder: {error}"));
         }
@@ -1624,10 +1622,6 @@ fn register_project(app: &mut RustChamber, directory: &Path, name: Option<&str>,
     let directory = directory.to_string_lossy().to_string();
     let id = app.model.add_project(&directory, name);
     app.sync_tracked_projects();
-    app.backend.send(Action::AddProject {
-        directory: directory.clone(),
-        name: name.map(str::to_string),
-    });
     if activate {
         app.select_project(&id);
     }
@@ -1734,10 +1728,6 @@ fn poll_clone(ctx: &egui::Context, app: &mut RustChamber) {
         let directory = path.to_string_lossy().to_string();
         let id = app.model.add_project(&directory, None);
         app.sync_tracked_projects();
-        app.backend.send(Action::AddProject {
-            directory,
-            name: None,
-        });
         app.select_project(&id);
         app.model
             .toast(ToastKind::Success, "Repository cloned and added");
@@ -1768,9 +1758,7 @@ mod tests {
             name: canonical.into(),
             name_override: None,
             color: None,
-            icon: None,
             hidden: false,
-            collapsed: false,
             added_at: 0.0,
         }
     }
@@ -1810,7 +1798,8 @@ mod tests {
     #[test]
     fn repository_urls_accept_https_ssh_and_git() {
         assert!(is_valid_repo_url("https://github.com/owner/repo.git"));
-        assert!(is_valid_repo_url("http://example.com/owner/repo"));
+        assert!(!is_valid_repo_url("http://example.com/owner/repo"));
+        assert!(!is_valid_repo_url("https://token@github.com/owner/repo"));
         assert!(is_valid_repo_url("ssh://git@github.com/owner/repo.git"));
         assert!(is_valid_repo_url("git@github.com:owner/repo.git"));
         assert!(!is_valid_repo_url(""));

@@ -353,8 +353,6 @@ pub struct UiState {
     pub timeline_show_all: bool,
     pub search_show_all: bool,
     pub project_menu: Option<String>,
-    pub project_picker_open: bool,
-    pub project_picker_query: String,
     pub select_mode: bool,
     pub selected_sessions: HashSet<String>,
     pub archive_open: bool,
@@ -499,14 +497,10 @@ impl RustChamber {
             .cloned()
             .unwrap_or_default();
         ui.home_project = Some(initial_target);
-        ui.home_allow_all = model.workspace_store.allow_all_new_sessions;
+        ui.home_allow_all = false;
         if std::env::var("RCHAMBER_OPEN_SEARCH").is_ok() {
             ui.search_open = true;
             ui.focus_search = true;
-        }
-        if std::env::var("RCHAMBER_OPEN_ADD_PROJECT").is_ok() {
-            ui.add_project
-                .begin(workspace.as_deref(), &model.workspace_store.projects);
         }
         if let Ok(panel) = std::env::var("RCHAMBER_OPEN_ADD_PROJECT") {
             let projects = model
@@ -863,7 +857,6 @@ impl RustChamber {
         if !ctx.input(|input| input.focused) {
             self.ui.header_menu = false;
             self.ui.session_menu = None;
-            self.ui.project_picker_open = false;
             self.ui.project_menu = None;
             self.ui.sidebar_menu = false;
             self.ui.more_menu = false;
@@ -933,7 +926,6 @@ impl RustChamber {
             let dismissed = self.ui.show_changes
                 || self.ui.header_menu
                 || self.ui.session_menu.is_some()
-                || self.ui.project_picker_open
                 || self.ui.project_menu.is_some()
                 || self.ui.sidebar_menu
                 || self.ui.more_menu
@@ -952,7 +944,6 @@ impl RustChamber {
             self.ui.show_changes = false;
             self.ui.header_menu = false;
             self.ui.session_menu = None;
-            self.ui.project_picker_open = false;
             self.ui.project_menu = None;
             self.ui.sidebar_menu = false;
             self.ui.more_menu = false;
