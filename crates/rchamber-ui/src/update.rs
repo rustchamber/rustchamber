@@ -451,25 +451,24 @@ fn actions(
 }
 
 fn progress_block(ui: &mut Ui, snapshot: &Snapshot, p: &Palette, width: f32) {
+    let progress = snapshot.progress();
+    let label = match snapshot.phase {
+        Phase::Updating if progress < 0.05 => "Updating Homebrew…",
+        Phase::Updating if progress < 0.88 => "Downloading update…",
+        Phase::Updating => "Installing update…",
+        _ => "Downloading update…",
+    };
     ui.horizontal(|ui| {
-        if snapshot.phase == Phase::Updating {
-            widgets::spinner(ui, 13.0, p.fg_muted);
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Updating with Homebrew…")
-                    .font(theme::font(12.0))
-                    .color(p.fg_muted),
-            );
-            return;
-        }
+        widgets::spinner(ui, 13.0, p.fg_muted);
+        ui.add_space(6.0);
         ui.label(
-            RichText::new("Downloading update…")
+            RichText::new(label)
                 .font(theme::font(12.0))
                 .color(p.fg_muted),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
-                RichText::new(format!("{}%", (snapshot.progress() * 100.0).round() as i32))
+                RichText::new(format!("{}%", (progress * 100.0).round() as i32))
                     .font(theme::font_mono(12.0))
                     .color(p.fg),
             );
@@ -479,10 +478,7 @@ fn progress_block(ui: &mut Ui, snapshot: &Snapshot, p: &Palette, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 5.0), Sense::hover());
     let radius = CornerRadius::same(3);
     ui.painter().rect_filled(rect, radius, p.subtle);
-    let filled = Rect::from_min_size(
-        rect.min,
-        Vec2::new(rect.width() * snapshot.progress(), rect.height()),
-    );
+    let filled = Rect::from_min_size(rect.min, Vec2::new(rect.width() * progress, rect.height()));
     if filled.width() > 0.0 {
         ui.painter().rect_filled(filled, radius, p.primary);
     }

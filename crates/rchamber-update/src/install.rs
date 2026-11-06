@@ -283,6 +283,31 @@ pub fn run_brew_upgrade(brew: &Path) -> Result<(), String> {
     })
 }
 
+pub fn brew_update(brew: &Path) {
+    let _ = Command::new(brew)
+        .arg("update")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+        .env("HOMEBREW_COLOR", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+pub fn brew_cache_path(brew: &Path) -> Option<PathBuf> {
+    let output = Command::new(brew)
+        .args(["--cache", "--cask", "rustchamber"])
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
 pub fn spawn_install(prepared: &PreparedInstall) -> Result<(), String> {
     if prepared.kind == InstallKind::Native {
         let staged = prepared

@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use url::Url;
 
 pub const RELEASES_URL: &str = "https://github.com/rustchamber/rustchamber/releases";
 
@@ -65,17 +64,11 @@ impl Release {
             })
     }
 
-    pub fn sha256(&self) -> Option<String> {
-        self.macos_zip()
-            .and_then(|asset| asset.digest.as_deref())
-            .and_then(|digest| digest.strip_prefix("sha256:"))
-            .map(str::to_string)
-    }
-
-    pub fn download_size(&self) -> Option<u64> {
-        self.macos_zip()
-            .map(|asset| asset.size)
-            .filter(|size| *size > 0)
+    pub fn macos_dmg(&self) -> Option<&Asset> {
+        self.assets.iter().find(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            name.ends_with(".dmg") && name.contains("macos")
+        })
     }
 }
 
@@ -127,12 +120,6 @@ pub fn release_url(release: &Release) -> String {
     }
 }
 
-pub fn asset_url(release: &Release) -> Option<Url> {
-    release
-        .macos_zip()
-        .and_then(|asset| Url::parse(&asset.browser_download_url).ok())
-}
-
 pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
     let mut releases = Vec::new();
     let mut rest = body;
@@ -159,8 +146,10 @@ pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
         let notes = find_text(entry, "content")
             .map(|content| html_to_text(&content))
             .filter(|notes| !notes.trim().is_empty());
-        let asset_name = format!("RustChamber-{version}-macos-universal.zip");
-        let download_url = format!("{RELEASES_URL}/download/{tag}/{asset_name}");
+        let dmg_name = format!("RustChamber-{version}-macos-universal.dmg");
+        let zip_name = format!("RustChamber-{version}-macos-universal.zip");
+        let dmg_url = format!("{RELEASES_URL}/download/{tag}/{dmg_name}");
+        let zip_url = format!("{RELEASES_URL}/download/{tag}/{zip_name}");
         releases.push(Release {
             tag_name: tag.to_string(),
             name: title,
@@ -169,12 +158,20 @@ pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
             draft: false,
             prerelease: !version.pre.is_empty(),
             published_at: updated,
-            assets: vec![Asset {
-                name: asset_name,
-                browser_download_url: download_url,
-                size: 0,
-                digest: None,
-            }],
+            assets: vec![
+                Asset {
+                    name: dmg_name,
+                    browser_download_url: dmg_url,
+                    size: 0,
+                    digest: None,
+                },
+                Asset {
+                    name: zip_name,
+                    browser_download_url: zip_url,
+                    size: 0,
+                    digest: None,
+                },
+            ],
         });
     }
     if releases.is_empty() {
@@ -368,7 +365,21 @@ mod tests {
                 ("RustChamber-0.2.0-macos-universal.zip", 42),
             ],
         );
-        assert_eq!(release.download_size(), Some(42));
+        assert_eq!(release.macos_zip().unwrap().size, 42);
+        assert!(release.macos_dmg().is_none());
+    }
+
+    #[test]
+    fn selects_the_dmg_asset() {
+        let release = release(
+            "v0.2.0",
+            false,
+            &[
+                ("RustChamber-0.2.0-macos-universal.zip", 42),
+                ("RustChamber-0.2.0-macos-universal.dmg", 64),
+            ],
+        );
+        assert_eq!(release.macos_dmg().unwrap().size, 64);
         assert_eq!(release.macos_zip().unwrap().size, 42);
     }
 
@@ -376,7 +387,10 @@ mod tests {
     fn reads_the_sha256_digest() {
         let mut release = release("v0.2.0", false, &[(ZIP, 42)]);
         release.assets[0].digest = Some(format!("sha256:{}", "a".repeat(64)));
-        assert_eq!(release.sha256(), Some("a".repeat(64)));
+        assert_eq!(
+            release.macos_zip().unwrap().digest.as_deref(),
+            Some(format!("sha256:{}", "a".repeat(64)).as_str())
+        );
     }
 
     #[test]
@@ -408,7 +422,11 @@ mod tests {
         assert_eq!(releases[0].tag_name, "v0.2.1-beta");
         assert!(releases[0].notes().contains("Dock icon fix"));
         assert!(releases[0].notes().contains("- Set the icon at runtime"));
-        assert_eq!(releases[0].download_size(), None);
+        assert_eq!(releases[0].macos_zip().unwrap().size, 0);
+        assert_eq!(
+            releases[0].macos_dmg().unwrap().browser_download_url,
+            "https://github.com/rustchamber/rustchamber/releases/download/v0.2.1-beta/RustChamber-0.2.1-beta-macos-universal.dmg"
+        );
         assert_eq!(
             releases[0].macos_zip().unwrap().browser_download_url,
             "https://github.com/rustchamber/rustchamber/releases/download/v0.2.1-beta/RustChamber-0.2.1-beta-macos-universal.zip"

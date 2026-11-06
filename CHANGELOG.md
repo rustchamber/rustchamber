@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3-beta
+
+- Homebrew updates now download the DMG with a real percentage and progress bar, then install from the Homebrew cache.
+- The update dialog shows the current step (Updating Homebrew, Downloading, Installing) and the percentage.
+
 ## 0.2.2-beta
 
 - The update check now falls back to the GitHub releases Atom feed when the API is rate-limited, so the sidebar arrow still appears.

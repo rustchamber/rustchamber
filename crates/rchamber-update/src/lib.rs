@@ -1,7 +1,7 @@
 mod github;
 mod install;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,11 +51,15 @@ pub struct Snapshot {
     pub info: Option<UpdateInfo>,
     pub received: u64,
     pub total: Option<u64>,
+    pub fraction: Option<f32>,
     pub error: Option<String>,
 }
 
 impl Snapshot {
     pub fn progress(&self) -> f32 {
+        if let Some(fraction) = self.fraction {
+            return fraction.clamp(0.0, 1.0);
+        }
         match self.total {
             Some(total) if total > 0 => {
                 (self.received as f64 / total as f64).clamp(0.0, 1.0) as f32
@@ -346,14 +350,24 @@ impl Worker {
             .version()
             .map(|version| version.to_string())
             .unwrap_or_else(|| release.tag_name.trim_start_matches('v').to_string());
-        let download_url = github::asset_url(&release)
-            .map(|url| url.to_string())
-            .unwrap_or_else(|| github::release_url(&release));
         let install = if release.macos_zip().is_none() {
             InstallKind::External
         } else {
             self.environment.kind
         };
+        let asset = if install == InstallKind::Homebrew {
+            release.macos_dmg().or_else(|| release.macos_zip())
+        } else {
+            release.macos_zip()
+        };
+        let download_url = asset
+            .map(|asset| asset.browser_download_url.clone())
+            .unwrap_or_else(|| github::release_url(&release));
+        let download_size = asset.map(|asset| asset.size).filter(|size| *size > 0);
+        let sha256 = asset
+            .and_then(|asset| asset.digest.as_deref())
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .map(str::to_string);
         let detail = if install == InstallKind::External {
             self.environment.detail.clone().or_else(|| {
                 (release.macos_zip().is_none())
@@ -369,8 +383,8 @@ impl Worker {
             published_label: release.published_at.as_deref().and_then(date_label),
             release_url: github::release_url(&release),
             download_url,
-            download_size: release.download_size(),
-            sha256: release.sha256(),
+            download_size,
+            sha256,
             install,
             detail,
         }
@@ -394,6 +408,7 @@ impl Worker {
         self.snapshot.phase = Phase::Downloading;
         self.snapshot.received = 0;
         self.snapshot.total = info.download_size;
+        self.snapshot.fraction = None;
         self.snapshot.error = None;
         self.publish();
         match self.download_and_stage(&info).await {
@@ -434,7 +449,8 @@ impl Worker {
                 install::sha256_file(&archive).is_ok_and(|hash| hash == expected)
             });
         if !verified {
-            self.fetch_asset(info, &archive).await?;
+            let partial = archive.with_extension("part");
+            self.fetch_asset(info, &archive, &partial, None).await?;
         }
         let actual = install::sha256_file(&archive)?;
         if let Some(expected) = info.sha256.as_deref()
@@ -449,10 +465,15 @@ impl Worker {
         install::prepare_archive(&info.version, &archive)
     }
 
-    async fn fetch_asset(&mut self, info: &UpdateInfo, archive: &PathBuf) -> Result<(), String> {
+    async fn fetch_asset(
+        &mut self,
+        info: &UpdateInfo,
+        target: &Path,
+        partial: &Path,
+        fraction: Option<(f32, f32)>,
+    ) -> Result<(), String> {
         use tokio::io::AsyncWriteExt;
-        let partial = archive.with_extension("zip.part");
-        let _ = std::fs::remove_file(&partial);
+        let _ = std::fs::remove_file(partial);
         let mut response = self
             .client
             .get(&info.download_url)
@@ -467,8 +488,11 @@ impl Worker {
             ));
         }
         self.snapshot.total = response.content_length().or(info.download_size);
+        if let Some((start, _)) = fraction {
+            self.snapshot.fraction = Some(start);
+        }
         self.publish();
-        let mut file = tokio::fs::File::create(&partial)
+        let mut file = tokio::fs::File::create(partial)
             .await
             .map_err(|error| format!("Could not save the update: {error}"))?;
         let mut received = 0u64;
@@ -483,6 +507,15 @@ impl Worker {
                 .map_err(|error| format!("Could not save the update: {error}"))?;
             received += chunk.len() as u64;
             self.snapshot.received = received;
+            if let Some((start, end)) = fraction {
+                let ratio = match self.snapshot.total {
+                    Some(total) if total > 0 => {
+                        (received as f64 / total as f64).clamp(0.0, 1.0) as f32
+                    }
+                    _ => 0.0,
+                };
+                self.snapshot.fraction = Some(start + (end - start) * ratio);
+            }
             if last_publish.elapsed() >= Duration::from_millis(90) {
                 last_publish = Instant::now();
                 self.publish();
@@ -495,14 +528,17 @@ impl Worker {
         if let Some(total) = self.snapshot.total
             && received != total
         {
-            let _ = std::fs::remove_file(&partial);
+            let _ = std::fs::remove_file(partial);
             return Err(format!(
                 "The download stopped early ({received} of {total} bytes)."
             ));
         }
-        std::fs::rename(&partial, archive)
+        std::fs::rename(partial, target)
             .map_err(|error| format!("Could not finish the update: {error}"))?;
         self.snapshot.received = received;
+        if let Some((_, end)) = fraction {
+            self.snapshot.fraction = Some(end);
+        }
         self.publish();
         Ok(())
     }
@@ -520,6 +556,68 @@ impl Worker {
         };
         self.snapshot.phase = Phase::Updating;
         self.snapshot.error = None;
+        self.snapshot.received = 0;
+        self.snapshot.total = info.download_size;
+        self.snapshot.fraction = Some(0.0);
+        self.publish();
+
+        let brew_for_update = brew.clone();
+        let _ = tokio::task::spawn_blocking(move || install::brew_update(&brew_for_update)).await;
+        self.snapshot.fraction = Some(0.03);
+        self.publish();
+
+        let brew_for_cache = brew.clone();
+        let cache = tokio::task::spawn_blocking(move || install::brew_cache_path(&brew_for_cache))
+            .await
+            .ok()
+            .flatten()
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(&info.version))
+                    && info.download_url.ends_with(".dmg")
+            });
+        if let Some(path) = cache {
+            if let Some(parent) = path.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                return self
+                    .homebrew_failed(format!("Could not prepare the Homebrew cache: {error}"));
+            }
+            let cached = path.is_file()
+                && info.sha256.as_deref().is_none_or(|expected| {
+                    install::sha256_file(&path).is_ok_and(|hash| hash == expected)
+                });
+            if !cached {
+                let partial = path.with_extension("part");
+                if let Err(error) = self
+                    .fetch_asset(&info, &path, &partial, Some((0.05, 0.85)))
+                    .await
+                {
+                    return self.homebrew_failed(error);
+                }
+                if let Some(expected) = info.sha256.as_deref() {
+                    match install::sha256_file(&path) {
+                        Ok(actual) if actual == expected => {}
+                        Ok(_) => {
+                            let _ = std::fs::remove_file(&path);
+                            return self.homebrew_failed(
+                                "The downloaded Homebrew package failed its integrity check."
+                                    .into(),
+                            );
+                        }
+                        Err(error) => return self.homebrew_failed(error),
+                    }
+                }
+            }
+            self.snapshot.fraction = Some(0.88);
+            self.publish();
+        } else {
+            self.snapshot.fraction = Some(0.10);
+            self.publish();
+        }
+
+        self.snapshot.fraction = Some(0.92);
         self.publish();
         let result = tokio::task::spawn_blocking(move || install::run_brew_upgrade(&brew)).await;
         let result = match result {
@@ -527,10 +625,7 @@ impl Worker {
             Err(error) => Err(format!("Could not run Homebrew: {error}")),
         };
         if let Err(error) = result {
-            self.snapshot.phase = Phase::Available;
-            self.snapshot.error = Some(error);
-            self.publish();
-            return;
+            return self.homebrew_failed(error);
         }
         match install::bundle_version(&bundle) {
             Some(installed) if installed == info.version => {
@@ -540,20 +635,27 @@ impl Worker {
                     staged: None,
                     log: install::cache_dir().join("update.log"),
                 });
+                self.snapshot.fraction = Some(1.0);
                 self.snapshot.phase = Phase::Ready;
             }
             Some(installed) => {
-                self.snapshot.phase = Phase::Available;
-                self.snapshot.error = Some(format!(
+                return self.homebrew_failed(format!(
                     "Homebrew finished, but {installed} is still installed instead of {}. Run `brew update` and try again.",
                     info.version
                 ));
             }
             None => {
-                self.snapshot.phase = Phase::Available;
-                self.snapshot.error = Some("Could not read the version Homebrew installed.".into());
+                return self
+                    .homebrew_failed("Could not read the version Homebrew installed.".into());
             }
         }
+        self.publish();
+    }
+
+    fn homebrew_failed(&mut self, error: String) {
+        self.snapshot.phase = Phase::Available;
+        self.snapshot.fraction = None;
+        self.snapshot.error = Some(error);
         self.publish();
     }
 
