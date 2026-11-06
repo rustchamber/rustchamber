@@ -835,6 +835,13 @@ impl RustChamber {
     pub fn apply_connection_settings(&mut self) {
         let endpoint = self.ui.settings_endpoint.trim().to_string();
         let password = self.ui.settings_password.trim().to_string();
+        if !endpoint.is_empty()
+            && let Err(error) = rchamber_api::ClientConfig::new(&endpoint)
+        {
+            self.model
+                .toast(ToastKind::Error, format!("Invalid endpoint: {error}"));
+            return;
+        }
         self.settings.endpoint = (!endpoint.is_empty()).then_some(endpoint.clone());
         self.settings.password = (!password.is_empty()).then_some(password.clone());
         self.settings.save();

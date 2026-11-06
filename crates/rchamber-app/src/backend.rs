@@ -15,6 +15,7 @@ use crate::action::{
 };
 use crate::live;
 use crate::snippets;
+use crate::workspace::paths_match;
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
@@ -877,6 +878,14 @@ impl Inner {
     }
 
     async fn event(&mut self, raw: RawEvent) {
+        if let Some(location) = &raw.location
+            && !self
+                .tracked
+                .iter()
+                .any(|project| paths_match(&project.directory, &location.directory))
+        {
+            return;
+        }
         let event = live::read(&raw);
         match &event {
             LiveEvent::TransportConnected => {

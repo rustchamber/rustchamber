@@ -85,6 +85,19 @@ impl ClientConfig {
     pub fn new(base_url: impl AsRef<str>) -> Result<Self, ApiError> {
         let base_url = Url::parse(base_url.as_ref())
             .map_err(|e| ApiError::Config(format!("invalid server url: {e}")))?;
+        if !matches!(base_url.scheme(), "http" | "https") {
+            return Err(ApiError::Config("server url must use http or https".into()));
+        }
+        if !base_url.username().is_empty() || base_url.password().is_some() {
+            return Err(ApiError::Config(
+                "server url must not contain credentials".into(),
+            ));
+        }
+        if base_url.scheme() == "http" && !is_loopback_host(&base_url) {
+            return Err(ApiError::Config(
+                "https is required for non-loopback server urls".into(),
+            ));
+        }
         Ok(Self::from_url(base_url))
     }
 
@@ -134,6 +147,22 @@ impl ApiError {
             _ => false,
         }
     }
+}
+
+fn is_loopback_host(url: &Url) -> bool {
+    if url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
+    {
+        return true;
+    }
+    url.host()
+        .and_then(|host| match host {
+            url::Host::Ipv4(address) => Some(std::net::IpAddr::V4(address)),
+            url::Host::Ipv6(address) => Some(std::net::IpAddr::V6(address)),
+            url::Host::Domain(_) => None,
+        })
+        .is_some_and(|address| address.is_loopback())
 }
 
 #[derive(Clone)]
@@ -983,5 +1012,15 @@ mod tests {
         let empty: SessionPage = serde_json::from_str("{}").unwrap();
         assert!(empty.data.is_empty());
         assert!(empty.cursor.next.is_none());
+    }
+
+    #[test]
+    fn client_config_requires_https_outside_loopback_and_no_userinfo() {
+        assert!(ClientConfig::new("http://127.0.0.1:1234").is_ok());
+        assert!(ClientConfig::new("http://localhost:1234").is_ok());
+        assert!(ClientConfig::new("https://example.com").is_ok());
+        assert!(ClientConfig::new("http://example.com").is_err());
+        assert!(ClientConfig::new("https://user:token@example.com").is_err());
+        assert!(ClientConfig::new("ftp://example.com").is_err());
     }
 }

@@ -382,6 +382,13 @@ pub fn clone_repo(url: &str, destination: &Path) -> Result<(), GitError> {
             parent.display()
         )));
     }
+    if std::fs::symlink_metadata(destination)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(GitError::Failed(
+            "clone destination must not be a symlink".into(),
+        ));
+    }
     if destination.exists() {
         if !destination.is_dir() {
             return Err(GitError::Failed(format!(
@@ -454,11 +461,27 @@ pub fn clone_repo(url: &str, destination: &Path) -> Result<(), GitError> {
     } else {
         stderr.trim().to_string()
     };
+    let message = redact_url(&message, url);
     Err(GitError::Failed(if message.is_empty() {
         "git clone failed".into()
     } else {
         message
     }))
+}
+
+fn redact_url(message: &str, url: &str) -> String {
+    let redacted = if let Some((scheme, rest)) = url.split_once("://") {
+        match rest.split_once('@') {
+            Some((_, host)) if !host.is_empty() => format!("{scheme}://***@{host}"),
+            _ => url.to_string(),
+        }
+    } else {
+        url.to_string()
+    };
+    if redacted == url {
+        return message.to_string();
+    }
+    message.replace(url, &redacted)
 }
 
 fn run(repo: &Path, args: &[&str]) -> Result<String, GitError> {
