@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5-beta
 
 - A fresh install starts with no projects. Add a project by folder, clone a repository, or
   import one from OpenCode; only sessions created after that are loaded.
