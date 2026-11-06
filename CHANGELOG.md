@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- In-app updates: RustChamber checks GitHub Releases at launch and every hour, shows a
+  blue download arrow in the sidebar, opens the release notes, downloads in the background,
+  and installs on restart.
+- Homebrew installs update through `brew upgrade --cask rustchamber`; DMG installs replace
+  the app bundle in place and reopen the new version.
+
 ## 0.1.0-beta
 
 First beta release. The alpha and beta share the same feature set; this version marks the

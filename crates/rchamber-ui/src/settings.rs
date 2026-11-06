@@ -2969,7 +2969,7 @@ fn text_link(ui: &mut Ui, p: &Palette, label: &str, url: &str, icon: Icon) {
     }
 }
 
-fn about(ui: &mut Ui, app: &RustChamber, p: &Palette) {
+fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     page_header(ui, p, "About", "Version, links, and build details.");
     section(ui, p, "", "", None, false, |ui| {
         ui.horizontal(|ui| {
@@ -3018,7 +3018,7 @@ fn about(ui: &mut Ui, app: &RustChamber, p: &Palette) {
         .map(|server| server.version.clone())
         .unwrap_or_else(|| "Unknown".into());
     section(ui, p, "", "", None, true, |ui| {
-        value_row(ui, p, "Version", env!("CARGO_PKG_VERSION"));
+        value_row(ui, p, "Version", crate::update::app_version());
         value_row(ui, p, "OpenCode version", &opencode);
         value_row(ui, p, "UI toolkit", "egui 0.37");
         value_row(
@@ -3031,6 +3031,54 @@ fn about(ui: &mut Ui, app: &RustChamber, p: &Palette) {
             .map(|path| home_relative(&path))
             .unwrap_or_else(|| "unavailable".into());
         value_row(ui, p, "Settings file", &settings_path);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if widgets::button(
+                ui,
+                "Check for updates",
+                Some(Icon::Refresh),
+                widgets::ButtonVariant::Outline,
+                widgets::ButtonSize::Sm,
+                p,
+            )
+            .clicked()
+            {
+                app.check_for_updates();
+            }
+            if let Some(info) = app.updates.available() {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!("Version {} is available", info.version))
+                        .font(theme::font(theme::TEXT_META))
+                        .color(p.blue),
+                );
+            } else if app.updates.snapshot().phase == rchamber_update::Phase::Checking {
+                ui.add_space(8.0);
+                widgets::spinner(ui, 13.0, p.fg_muted);
+                ui.label(
+                    RichText::new("Checking…")
+                        .font(theme::font(theme::TEXT_META))
+                        .color(p.fg_muted),
+                );
+            } else if app.updates.snapshot().phase == rchamber_update::Phase::Idle
+                && app.updates.snapshot().error.is_none()
+            {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Up to date")
+                        .font(theme::font(theme::TEXT_META))
+                        .color(p.fg_muted),
+                );
+            }
+        });
+        if let Some(error) = app.updates.snapshot().error.clone() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(error.lines().next().unwrap_or(&error))
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.error_text),
+            );
+        }
     });
 }
 

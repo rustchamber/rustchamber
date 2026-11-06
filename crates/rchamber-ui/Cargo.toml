@@ -13,6 +13,7 @@ rchamber-api = { path = "../rchamber-api" }
 rchamber-app = { path = "../rchamber-app" }
 rchamber-git = { path = "../rchamber-git" }
 rchamber-term = { path = "../rchamber-term" }
+rchamber-update = { path = "../rchamber-update" }
 arboard = "3.7"
 chrono.workspace = true
 directories.workspace = true

@@ -49,6 +49,12 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                 panel_config::open_dialog(ui.ctx());
             }
             ui.add_space(RAIL_GAP);
+            if app.updates.available().is_some() {
+                ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
+                    ui.add_space(RAIL_PAD);
+                    crate::update::sidebar_badge(ui, app, &p);
+                });
+            }
         },
     );
 

@@ -6,6 +6,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 VERSION="${VERSION:-$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rchamber") | .version')}"
 BUILD="${BUILD:-1}"
+export RCHAMBER_VERSION="$VERSION"
 ARM_TARGET="aarch64-apple-darwin"
 INTEL_TARGET="x86_64-apple-darwin"
 APP="dist/RustChamber.app"

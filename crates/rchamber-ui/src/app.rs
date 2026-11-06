@@ -351,6 +351,7 @@ pub struct UiState {
 pub struct RustChamber {
     pub model: AppModel,
     pub backend: Backend,
+    pub updates: crate::update::UpdateCenter,
     pub settings: Settings,
     pub palette: Palette,
     pub ui: UiState,
@@ -466,11 +467,13 @@ impl RustChamber {
             endpoint: settings.endpoint.clone(),
             password: settings.password.clone(),
         };
-        let backend = Backend::spawn(config, wake);
+        let backend = Backend::spawn(config, Arc::clone(&wake));
+        let updates = crate::update::UpdateCenter::new(crate::update::app_version(), wake);
 
         Self {
             model,
             backend,
+            updates,
             settings,
             palette,
             ui,
@@ -496,6 +499,11 @@ impl RustChamber {
             if connection_failed {
                 self.ui.show_changes = false;
             }
+        }
+        self.updates.poll();
+        if self.updates.take_open_request() {
+            self.ui.show_settings = false;
+            self.updates.open();
         }
     }
 
@@ -595,6 +603,16 @@ impl RustChamber {
         self.ui.settings_endpoint = self.settings.endpoint.clone().unwrap_or_default();
         self.ui.settings_password = self.settings.password.clone().unwrap_or_default();
         self.ui.show_settings = true;
+    }
+
+    pub fn check_for_updates(&mut self) {
+        if self.updates.available().is_some() {
+            self.ui.show_settings = false;
+            self.updates.open();
+        } else {
+            self.updates.check();
+            self.model.toast(ToastKind::Info, "Checking for updates…");
+        }
     }
 
     pub fn apply_connection_settings(&mut self) {
@@ -1038,6 +1056,13 @@ fn panel_drop_overlay(ctx: &egui::Context, p: &Palette, drag: &TabDrag, target: 
 impl eframe::App for RustChamber {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.palette.bg.to_normalized_gamma_f32()
+    }
+
+    fn on_exit(&mut self) {
+        self.model.save_draft();
+        crate::persist::save_drafts(&self.model.drafts);
+        self.backend.send(Action::Shutdown);
+        std::thread::sleep(Duration::from_millis(120));
     }
 
     fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -1486,6 +1511,7 @@ impl eframe::App for RustChamber {
         if self.ui.palette_open {
             palette::show(&ctx, self);
         }
+        crate::update::show(&ctx, self);
         self.rename_dialog(&ctx);
         self.toasts(&ctx, layout.rail);
 

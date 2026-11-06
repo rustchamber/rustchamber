@@ -26,13 +26,14 @@ something changed, so an idle window costs almost no CPU.
 | `rchamber-api` | HTTP client, SSE subscription, typed wire models, server process lifecycle |
 | `rchamber-git` | Git CLI wrapper with timeouts and porcelain parsing |
 | `rchamber-term` | PTY sessions and a VT emulator |
+| `rchamber-update` | Release discovery, background download, signature checks, and self-install |
 | `rchamber-app` | Action and event types, backend actor, state projection, drafts, attachments, snippets |
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theme engine |
 | `rchamber` | Binary entry point |
 
 Dependencies point downward: `rchamber` depends on `rchamber-ui`; the UI depends on
-`rchamber-app`, `rchamber-git`, and `rchamber-term`; the app depends on `rchamber-api`.
-`rchamber-api` has no knowledge of the UI.
+`rchamber-app`, `rchamber-git`, `rchamber-term`, and `rchamber-update`; the app depends on
+`rchamber-api`. `rchamber-api` has no knowledge of the UI.
 
 ## Server lifecycle
 

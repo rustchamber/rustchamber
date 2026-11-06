@@ -21,5 +21,6 @@ pub mod sidebar;
 pub mod surfaces;
 pub mod theme;
 pub mod theme_store;
+pub mod update;
 pub mod widgets;
 pub use app::RustChamber;

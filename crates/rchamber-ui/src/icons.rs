@@ -45,6 +45,8 @@ pub enum Icon {
     Menu,
     Info,
     Circle,
+    Download,
+    Restart,
 }
 
 impl Icon {
@@ -89,6 +91,8 @@ impl Icon {
             Icon::Menu => "bytes://rust-ui/menu.svg",
             Icon::Info => "bytes://rust-ui/info.svg",
             Icon::Circle => "bytes://rust-ui/circle.svg",
+            Icon::Download => "bytes://rust-ui/download.svg",
+            Icon::Restart => "bytes://rust-ui/rotate-ccw.svg",
         }
     }
 
@@ -133,6 +137,8 @@ impl Icon {
             Icon::Menu => data::MENU,
             Icon::Info => data::INFO,
             Icon::Circle => data::CIRCLE,
+            Icon::Download => data::DOWNLOAD,
+            Icon::Restart => data::ROTATECCW,
         }
     }
 }

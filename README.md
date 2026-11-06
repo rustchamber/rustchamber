@@ -49,6 +49,18 @@ quarantine flag:
 xattr -dr com.apple.quarantine /Applications/RustChamber.app
 ```
 
+### Updates
+
+RustChamber checks the latest GitHub release a few seconds after launch and every hour
+after that. When a newer version exists, a blue download arrow appears at the bottom of the
+sidebar. It opens the release notes, downloads the update in the background while you keep
+working, and offers **Restart to update** when the download finishes.
+
+The update path follows how RustChamber was installed. A Homebrew install runs
+`brew upgrade --cask rustchamber`; a DMG install replaces the app bundle in place and
+reopens the new version. If the app runs from a mounted disk image or a folder it cannot
+write to, the dialog links to the release instead.
+
 Linux and Windows packages are not published yet. Both platforms build from source.
 
 ## Build from source
@@ -128,6 +140,7 @@ Useful environment variables:
 | `RCHAMBER_SURFACE` | Open `files`, `git`, `changes`, `terminal`, or `context` |
 | `RCHAMBER_ZONE` | Dock the panel `open` (right) or `bottom` |
 | `RCHAMBER_OPEN_SESSION` | Open a session id at startup |
+| `RCHAMBER_UPDATE_FEED` | Override the releases API used by the update check |
 | `OPENCODE_PASSWORD` | Reuse an explicit server password |
 
 Snippets are Markdown files in `~/.config/opencode/snippets` or
@@ -163,6 +176,7 @@ on demand.
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theming |
 | `rchamber-git` | Native git operations with timeouts and porcelain parsing |
 | `rchamber-term` | PTY session and VT emulator |
+| `rchamber-update` | Release feed, background download, signature checks, and self-install |
 | `rchamber` | Binary entry point |
 
 More detail is in [`docs/architecture.md`](docs/architecture.md).
@@ -186,7 +200,7 @@ Known limits:
 
 - No embedded web preview, plugin manager, or MCP configuration editor.
 - Providers, agents, commands, and skills are shown read-only, as reported by OpenCode.
-- No auto-update yet.
+- Linux and Windows builds check for updates but open the release page instead of installing.
 - An OpenCode CLI must be installed; the app does not bundle it.
 
 ## License

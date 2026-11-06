@@ -63,6 +63,7 @@ pub enum ButtonVariant {
     Chip,
     Secondary,
     Link,
+    Success,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +244,12 @@ fn button_colors(p: &Palette, variant: ButtonVariant) -> ButtonColors {
             [0.04, 0.07, 0.10, 0.08],
             [18, 26, 36, 31],
             p.info_text,
+        ),
+        ButtonVariant::Success => tint(
+            p.green,
+            [0.10, 0.16, 0.22, 0.14],
+            [34, 52, 70, 42],
+            p.success_text,
         ),
         ButtonVariant::Neutral => ButtonColors {
             base: p.bg_soft,

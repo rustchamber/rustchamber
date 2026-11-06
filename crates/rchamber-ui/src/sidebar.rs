@@ -1423,6 +1423,7 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                     "⌘K commands · ⌘N new session · ⌘, settings",
                 );
             }
+            crate::update::sidebar_badge(ui, app, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_space(FOOTER_PAD_END);
