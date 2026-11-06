@@ -371,9 +371,10 @@ fn actions(
         }
         Phase::Downloading => {
             widgets::spinner(ui, 14.0, p.fg_muted);
+            let percent = (snapshot.progress() * 100.0).round() as i32;
             let _ = widgets::button_ex(
                 ui,
-                "Downloading…",
+                &format!("Downloading… {percent}%"),
                 None,
                 widgets::ButtonVariant::Primary,
                 widgets::ButtonSize::Md,
@@ -383,9 +384,15 @@ fn actions(
         }
         Phase::Updating => {
             widgets::spinner(ui, 14.0, p.fg_muted);
+            let percent = (snapshot.progress() * 100.0).round() as i32;
+            let label = if snapshot.progress() < 0.88 {
+                format!("Updating… {percent}%")
+            } else {
+                format!("Installing… {percent}%")
+            };
             let _ = widgets::button_ex(
                 ui,
-                "Updating…",
+                &label,
                 None,
                 widgets::ButtonVariant::Primary,
                 widgets::ButtonSize::Md,

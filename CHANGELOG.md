@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4-beta
+
+- The update button now also shows the current percentage while downloading or installing.
+
 ## 0.2.3-beta
 
 - Homebrew updates now download the DMG with a real percentage and progress bar, then install from the Homebrew cache.
