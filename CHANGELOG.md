@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.8
+
+- Prefer the OpenCode 2 CLI over an older OpenCode 1 installation. OpenCode 2 is required by the current API; a version 1 binary now produces a clear error instead of an HTTP 400.
+- The Flatpak wrapper also prefers the OpenCode 2 binary bundled with OpenChamber when present.
+
 ## 0.2.7
 
 - Added a Flatpak manifest for Flathub. The sandbox runs the host `opencode`,

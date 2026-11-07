@@ -10,15 +10,35 @@ exec flatpak-spawn --watch-bus --host \
   --env="OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
   --env="OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
   sh -c '
-    for candidate in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
-      if [ -x "$candidate" ]; then
-        exec "$candidate" "$@"
+    pick_opencode() {
+      fallback=""
+      for candidate in \
+        "$HOME/.opencode/bin/opencode" \
+        "$HOME/.local/bin/opencode" \
+        "$HOME/.local/share/openchamber/resources/opencode-cli/opencode" \
+        "/opt/OpenChamber/resources/opencode-cli/opencode"; do
+        [ -x "$candidate" ] || continue
+        [ -n "$fallback" ] || fallback="$candidate"
+        major=$("$candidate" --version 2>/dev/null | grep -o "[0-9]\+" | head -1)
+        if [ -n "$major" ] && [ "$major" -ge 2 ]; then
+          echo "$candidate"
+          return 0
+        fi
+      done
+      if [ -n "$fallback" ]; then
+        echo "$fallback"
+        return 0
       fi
-    done
-    if command -v opencode >/dev/null 2>&1; then
-      exec opencode "$@"
-    fi
-    echo "RustChamber: opencode was not found on the host." >&2
-    echo "Install it from https://opencode.ai/docs and try again." >&2
-    exit 127
+      if command -v opencode >/dev/null 2>&1; then
+        command -v opencode
+        return 0
+      fi
+      return 1
+    }
+    candidate=$(pick_opencode) || {
+      echo "RustChamber: OpenCode 2 was not found on the host." >&2
+      echo "Install OpenCode 2 or set RCHAMBER_OPENCODE_BIN." >&2
+      exit 127
+    }
+    exec "$candidate" "$@"
   ' sh "$@"

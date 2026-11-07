@@ -29,7 +29,7 @@ modules:
       env:
         CARGO_HOME: /run/build/rustchamber/cargo
         CARGO_NET_OFFLINE: 'true'
-        RCHAMBER_VERSION: 0.2.7
+        RCHAMBER_VERSION: 0.2.8
     build-commands:
       - cargo build --release --locked --offline
       - install -Dm755 target/release/rchamber /app/bin/rchamber
@@ -53,6 +53,6 @@ modules:
     sources:
       - type: git
         url: https://github.com/rustchamber/rustchamber.git
-        tag: v0.2.7
+        tag: v0.2.8
         commit: 7768ccacbb6c6ec2695769df9d2980a77bb198e3
       - cargo-sources.json

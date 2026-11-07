@@ -82,8 +82,10 @@ The tarball remains available for other distributions and for installs without r
 2. Extract it and run `./install.sh`. It installs to `~/.local` and needs no sudo.
    Running `./rchamber` from the extracted folder works too. Set `PREFIX=/usr/local` to
    install somewhere else, and pass `--uninstall` to remove it.
-3. Install the [OpenCode CLI](https://opencode.ai/docs). RustChamber looks for `opencode`
-   in `PATH`, `~/.opencode/bin`, `~/.local/bin`, and other common locations.
+3. Install the [OpenCode CLI](https://opencode.ai/docs). RustChamber requires OpenCode 2.x
+   and looks for `opencode` in `PATH`, `~/.opencode/bin`, `~/.local/bin`, the OpenChamber
+   bundled CLI, and other common locations. If you have both OpenCode 1 and 2 installed,
+   set `RCHAMBER_OPENCODE_BIN` to the 2.x binary.
 
 The tarball includes the desktop entry, hicolor icons, AppStream metadata, and
 `check-deps.sh`, which prints the exact install command for the detected distribution when

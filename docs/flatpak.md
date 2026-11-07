@@ -68,7 +68,8 @@ flatpak run dev.rustchamber.RustChamber
 
 The wrappers expect these on the host:
 
-- `opencode` in `PATH`, `~/.opencode/bin`, or `~/.local/bin`
+- OpenCode 2.x (`opencode`) in `PATH`, `~/.opencode/bin`, `~/.local/bin`, or the
+  OpenChamber bundled CLI. OpenCode 1.x is not compatible with the current API.
 - `git`
 - the login shell from `/etc/passwd`
 - `xdg-open` (xdg-utils)
@@ -107,7 +108,7 @@ Flatpak and Flathub own updates. The app detects `FLATPAK_ID` and:
    ```yaml
    - type: git
      url: https://github.com/rustchamber/rustchamber.git
-     tag: v0.2.7
+     tag: v0.2.8
      commit: <full-commit-sha>
    ```
 

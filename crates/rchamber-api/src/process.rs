@@ -69,6 +69,14 @@ pub async fn launch(options: LaunchOptions) -> Result<ServerHandle, ApiError> {
                 "OpenCode binary not found. Install opencode or set RCHAMBER_OPENCODE_BIN.".into(),
             )
         })?;
+    if let Some(major) = opencode_major(&binary)
+        && major < 2
+    {
+        return Err(ApiError::Config(format!(
+            "OpenCode 2.x is required, but {} reports version {major}.x. Install OpenCode 2 or set RCHAMBER_OPENCODE_BIN.",
+            binary.display()
+        )));
+    }
     let port = match options.port {
         Some(port) => port,
         None => free_port().map_err(|e| ApiError::Other(format!("no free port: {e}")))?,
@@ -200,25 +208,18 @@ pub fn find_opencode_binary() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) {
-                "opencode.exe"
-            } else {
-                "opencode"
-            });
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
     let file = if cfg!(windows) {
         "opencode.exe"
     } else {
         "opencode"
     };
-    let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            candidates.push(dir.join(file));
+        }
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     if let Some(home) = &home {
         // The official installer and common package layouts. A desktop session
         // launched from the application menu often has a shorter PATH than an
@@ -227,11 +228,60 @@ pub fn find_opencode_binary() -> Option<PathBuf> {
         candidates.push(home.join(".local").join("bin").join(file));
         candidates.push(home.join(".bun").join("bin").join(file));
         candidates.push(home.join(".npm-global").join("bin").join(file));
+        // OpenChamber ships the OpenCode 2 CLI under its resource directory.
+        candidates.push(
+            home.join(".local")
+                .join("share")
+                .join("openchamber")
+                .join("resources")
+                .join("opencode-cli")
+                .join(file),
+        );
     }
+    candidates.push(PathBuf::from("/opt/OpenChamber/resources/opencode-cli").join(file));
     candidates.push(PathBuf::from("/opt/opencode/bin").join(file));
     candidates.push(PathBuf::from("/usr/local/bin").join(file));
     candidates.push(PathBuf::from("/usr/bin").join(file));
-    candidates.into_iter().find(|candidate| candidate.is_file())
+
+    // OpenCode 1 and OpenCode 2 expose different HTTP schemas. RustChamber
+    // targets OpenCode 2, so prefer a v2 binary even when an older CLI comes
+    // first in PATH. Keep the first existing binary as a fallback so the user
+    // gets a useful version error instead of "binary not found".
+    let mut fallback = None;
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let major = opencode_major(&candidate);
+        tracing::debug!(path = %candidate.display(), ?major, "opencode candidate");
+        if fallback.is_none() {
+            fallback = Some(candidate.clone());
+        }
+        if major.is_some_and(|major| major >= 2) {
+            return Some(candidate);
+        }
+    }
+    fallback
+}
+
+fn opencode_major(binary: &Path) -> Option<u64> {
+    let output = std::process::Command::new(binary)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    version_major(&text)
+}
+
+fn version_major(text: &str) -> Option<u64> {
+    text.split(|character: char| !character.is_ascii_digit())
+        .find(|part| !part.is_empty())
+        .and_then(|part| part.parse().ok())
 }
 
 pub fn default_workspace() -> PathBuf {
@@ -240,4 +290,17 @@ pub fn default_workspace() -> PathBuf {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_major;
+
+    #[test]
+    fn reads_the_major_version_from_opencode_output() {
+        assert_eq!(version_major("opencode v2.2.5\n"), Some(2));
+        assert_eq!(version_major("1.18.31"), Some(1));
+        assert_eq!(version_major("opencode v10.0.1"), Some(10));
+        assert_eq!(version_major("unknown"), None);
+    }
 }

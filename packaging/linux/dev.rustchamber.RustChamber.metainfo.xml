@@ -59,7 +59,7 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="0.2.7" date="2026-11-07">
+    <release version="0.2.8" date="2026-11-07">
       <description>
         <p>Portable Linux packages, Flatpak support, and desktop theme detection.</p>
       </description>
