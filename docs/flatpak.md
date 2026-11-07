@@ -125,9 +125,10 @@ Flatpak and Flathub own updates. The app detects `FLATPAK_ID` and:
    ```
 
 4. Fork [flathub/flathub](https://github.com/flathub/flathub), clone the fork on the
-   `new-pr` branch, add the manifest and `packaging/flatpak/flathub.json` following the
-   repository's new-app submission template, and open a pull request against `new-pr`
-   (not `master`). The app ID is `dev.rustchamber.RustChamber`; the domain
+   `new-pr` branch, add the manifest, `cargo-sources.json`, and
+   `packaging/flatpak/flathub.json` following the repository's new-app submission
+   template, and open a pull request against `new-pr` (not `master`). The app ID is
+   `dev.rustchamber.RustChamber`; the domain
    `rustchamber.dev` is owned by the project, so complete the verification requested in
    the review. The `flathub.json` limits the initial build to x86_64.
 
