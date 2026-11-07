@@ -39,7 +39,7 @@ jobs:
 
       - name: Install runtime and SDK
         run: |
-          flatpak remote-add --if-not-exists --system flathub \
+          sudo flatpak remote-add --if-not-exists --system flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y flathub \
             org.freedesktop.Platform//26.08 \
