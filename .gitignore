@@ -1,4 +1,7 @@
 /target
+/target-bullseye
+/build-flatpak
+/repo
 /labs
 /dist
 .DS_Store

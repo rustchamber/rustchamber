@@ -1,0 +1,67 @@
+name: Flatpak
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packaging/flatpak/**"
+      - "packaging/linux/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/flatpak.yml"
+  pull_request:
+    paths:
+      - "packaging/flatpak/**"
+      - "packaging/linux/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/flatpak.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils \
+            appstream appstream-compose elfutils
+
+      - name: Install runtime and SDK
+        run: |
+          flatpak remote-add --if-not-exists --system flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub \
+            org.freedesktop.Platform//26.08 \
+            org.freedesktop.Sdk//26.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//26.08
+
+      - name: Validate metadata
+        run: |
+          desktop-file-validate packaging/linux/dev.rustchamber.RustChamber.desktop
+          appstreamcli validate packaging/linux/dev.rustchamber.RustChamber.metainfo.xml
+
+      - name: Build Flatpak
+        run: |
+          mkdir -p dist
+          flatpak-builder --repo=repo --force-clean --disable-rofiles-fuse \
+            build-flatpak \
+            packaging/flatpak/dev.rustchamber.RustChamber.local.yml
+          flatpak build-bundle repo \
+            dist/RustChamber-0.2.7-beta-x86_64.flatpak \
+            dev.rustchamber.RustChamber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RustChamber-flatpak
+          path: dist/*.flatpak

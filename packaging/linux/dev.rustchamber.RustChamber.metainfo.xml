@@ -39,5 +39,31 @@
   <provides>
     <binary>rchamber</binary>
   </provides>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The new-session composer with a project or Chat target</caption>
+      <image type="source">https://raw.githubusercontent.com/rustchamber/rustchamber/main/docs/screenshots/home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Streaming chat with tools, reasoning, and session context</caption>
+      <image type="source">https://raw.githubusercontent.com/rustchamber/rustchamber/main/docs/screenshots/chat.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Native git panel with staged and unstaged changes</caption>
+      <image type="source">https://raw.githubusercontent.com/rustchamber/rustchamber/main/docs/screenshots/git.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.2.7-beta" date="2026-11-07">
+      <description>
+        <p>Portable Linux packages, Flatpak support, and desktop theme detection.</p>
+      </description>
+    </release>
+    <release version="0.2.6-beta" date="2026-11-06">
+      <description>
+        <p>First Linux release with native packages and in-app updates.</p>
+      </description>
+    </release>
+  </releases>
   <content_rating type="oars-1.1"/>
 </component>

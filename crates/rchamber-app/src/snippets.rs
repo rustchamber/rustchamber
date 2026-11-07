@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 
 #[derive(Clone, Debug)]
 pub struct Snippet {
@@ -75,11 +77,51 @@ fn directories(workspace: Option<&str>) -> Vec<(PathBuf, &'static str)> {
         (config.join("snippets"), "global"),
         (config.join("snippet"), "global"),
     ];
+    if let Some(host) = host_home().filter(|host| host != &home) {
+        let host_config = host.join(".config").join("opencode");
+        result.push((host_config.join("snippets"), "global"));
+        result.push((host_config.join("snippet"), "global"));
+    }
     if let Some(workspace) = workspace.filter(|value| !value.is_empty()) {
         result.push((Path::new(workspace).join(".opencode/snippets"), "project"));
         result.push((Path::new(workspace).join(".opencode/snippet"), "project"));
     }
     result
+}
+
+/// The real home directory when running inside a Flatpak sandbox.
+///
+/// In a sandbox `$HOME` points at `~/.var/app/<app-id>`, so snippets installed
+/// for the host OpenCode CLI would otherwise be invisible. `flatpak-spawn`
+/// asks the host for its `$HOME`; the answer is cached for the process.
+fn host_home() -> Option<PathBuf> {
+    std::env::var_os("FLATPAK_ID")?;
+
+    #[cfg(target_os = "linux")]
+    {
+        static HOST_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+        HOST_HOME
+            .get_or_init(|| {
+                let output = std::process::Command::new("flatpak-spawn")
+                    .args(["--host", "sh", "-c", "printf %s \"$HOME\""])
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()?;
+                if !output.status.success() {
+                    return None;
+                }
+                let value = String::from_utf8(output.stdout).ok()?;
+                let path = PathBuf::from(value.trim());
+                (!path.as_os_str().is_empty() && path.is_dir()).then_some(path)
+            })
+            .clone()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 fn read_snippet(path: &Path, source: &'static str) -> Option<Snippet> {

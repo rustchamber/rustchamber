@@ -381,6 +381,7 @@ pub struct RustChamber {
     pub palette: Palette,
     pub ui: UiState,
     pub md: Markdown,
+    system_theme: crate::system_theme::SystemTheme,
     system_dark: bool,
     legacy_theme: ThemeMode,
     legacy_scale: f32,
@@ -531,6 +532,8 @@ impl RustChamber {
         };
         let backend = Backend::spawn(config, Arc::clone(&wake));
         backend.send(Action::SetTrackedProjects(model.tracked_projects()));
+        let theme_wake = Arc::clone(&wake);
+        let system_theme = crate::system_theme::SystemTheme::spawn(move || theme_wake());
         let updates = crate::update::UpdateCenter::new(crate::update::app_version(), wake);
 
         Self {
@@ -541,6 +544,7 @@ impl RustChamber {
             palette,
             ui,
             md: Markdown::default(),
+            system_theme,
             system_dark,
             legacy_theme,
             legacy_scale,
@@ -1338,7 +1342,10 @@ impl eframe::App for RustChamber {
             self.open_session(id);
         }
 
-        let system_dark = matches!(ctx.system_theme(), Some(egui::Theme::Dark));
+        let system_dark = self
+            .system_theme
+            .dark()
+            .unwrap_or_else(|| matches!(ctx.system_theme(), Some(egui::Theme::Dark)));
         if system_dark != self.system_dark {
             self.system_dark = system_dark;
             if self.settings.theme == ThemeMode::System {

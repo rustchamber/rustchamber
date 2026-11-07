@@ -229,6 +229,7 @@ impl Client {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
+            tracing::debug!(status = status.as_u16(), body = %truncate(&body, 200), "request failed");
             return Err(parse_error(status.as_u16(), &body));
         }
         serde_json::from_str(&body)
@@ -292,6 +293,7 @@ impl Client {
             return Ok(());
         }
         let body = response.text().await.unwrap_or_default();
+        tracing::debug!(status = status.as_u16(), body = %truncate(&body, 200), "request failed");
         Err(parse_error(status.as_u16(), &body))
     }
 

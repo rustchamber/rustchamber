@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.7-beta
+
+- Added a Flatpak manifest for Flathub. The sandbox runs the host `opencode`,
+  `git`, shell, and file opener through `flatpak-spawn`, so projects, credentials,
+  and the user's toolchain keep working.
+- The `System` theme now reads the desktop color scheme from the XDG portal on
+  Linux, fixing light mode on Plasma and GNOME when the desktop is dark.
+- Flatpak installs no longer check for GitHub updates; they show the
+  `flatpak update` command instead.
+- Snippets are also loaded from the host's `~/.config/opencode/snippets` inside a
+  Flatpak sandbox, and the terminal uses the host login shell.
+- Linux packages are now built inside a pinned Ubuntu 20.04 container, so the
+  published binary only needs glibc 2.31. It runs on Ubuntu 20.04+ (and 22.04/24.04),
+  Debian 11+, Fedora 32+, RHEL 9, openSUSE Leap and current Arch, instead of
+  only distributions as new as the GitHub runner.
+- Native packages are published next to the tarball: `.deb` (Debian/Ubuntu),
+  `.rpm` (Fedora/RHEL/openSUSE) and `.pkg.tar.zst` (Arch), with the desktop
+  entry, icons and runtime dependencies declared.
+- The tarball installer now checks X11/Wayland/OpenGL libraries and prints the
+  exact install command for the detected distribution, supports `--uninstall`,
+  and refreshes the KDE menu cache.
+- The OpenCode CLI is also discovered in `~/.local/bin`, `~/.bun/bin`,
+  `/opt/opencode/bin` and other common locations, which fixes launches from the
+  application menu where `PATH` is shorter than in a terminal.
+- HEIC conversion through `ffmpeg` now passes `-i`, and the terminal falls back
+  to `/bin/sh` when `/bin/bash` is not installed.
+
 ## 0.2.6-beta
 
 - Linux is now a published target: the release workflow builds a portable

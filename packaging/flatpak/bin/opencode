@@ -1,0 +1,24 @@
+#!/bin/sh
+# Run the host's OpenCode CLI through the Flatpak spawn portal.
+. /app/bin/host-env.sh
+
+exec flatpak-spawn --watch-bus --host \
+  --directory="$PWD" \
+  --env="HOME=$HOST_HOME" \
+  --env="PATH=$HOST_PATH" \
+  --env="OPENCODE_PASSWORD=${OPENCODE_PASSWORD:-}" \
+  --env="OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
+  --env="OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
+  sh -c '
+    for candidate in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+      if [ -x "$candidate" ]; then
+        exec "$candidate" "$@"
+      fi
+    done
+    if command -v opencode >/dev/null 2>&1; then
+      exec opencode "$@"
+    fi
+    echo "RustChamber: opencode was not found on the host." >&2
+    echo "Install it from https://opencode.ai/docs and try again." >&2
+    exit 127
+  ' sh "$@"

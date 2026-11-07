@@ -170,6 +170,7 @@ struct Worker {
     snapshot: Snapshot,
     prepared: Arc<Mutex<Option<PreparedInstall>>>,
     environment: Environment,
+    flatpak: bool,
 }
 
 impl Worker {
@@ -194,12 +195,13 @@ impl Worker {
             snapshot: Snapshot::default(),
             prepared,
             environment: install::discover(),
+            flatpak: std::env::var_os("FLATPAK_ID").is_some(),
         }
     }
 
     async fn run(&mut self, mut commands: UnboundedReceiver<Command>) {
         let mut next_check = tokio::time::Instant::now() + FIRST_CHECK;
-        if std::env::var_os("RCHAMBER_NO_UPDATE_CHECK").is_some() {
+        if self.flatpak || std::env::var_os("RCHAMBER_NO_UPDATE_CHECK").is_some() {
             next_check = tokio::time::Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
         }
         loop {
@@ -223,6 +225,13 @@ impl Worker {
     }
 
     async fn check(&mut self) {
+        if self.flatpak {
+            self.snapshot.phase = Phase::Idle;
+            self.snapshot.info = None;
+            self.snapshot.error = None;
+            self.publish();
+            return;
+        }
         if self.snapshot.phase == Phase::Ready || self.snapshot.phase == Phase::Downloading {
             return;
         }

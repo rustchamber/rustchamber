@@ -3036,45 +3036,59 @@ fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             .unwrap_or_else(|| "unavailable".into());
         value_row(ui, p, "Settings file", &settings_path);
         ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if widgets::button(
-                ui,
-                "Check for updates",
-                Some(Icon::Refresh),
-                widgets::ButtonVariant::Outline,
-                widgets::ButtonSize::Sm,
-                p,
-            )
-            .clicked()
-            {
-                app.check_for_updates();
-            }
-            if let Some(info) = app.updates.available() {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!("Version {} is available", info.version))
-                        .font(theme::font(theme::TEXT_META))
-                        .color(p.blue),
-                );
-            } else if app.updates.snapshot().phase == rchamber_update::Phase::Checking {
-                ui.add_space(8.0);
-                widgets::spinner(ui, 13.0, p.fg_muted);
-                ui.label(
-                    RichText::new("Checking…")
-                        .font(theme::font(theme::TEXT_META))
-                        .color(p.fg_muted),
-                );
-            } else if app.updates.snapshot().phase == rchamber_update::Phase::Idle
-                && app.updates.snapshot().error.is_none()
-            {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Up to date")
-                        .font(theme::font(theme::TEXT_META))
-                        .color(p.fg_muted),
-                );
-            }
-        });
+        if app.updates.is_flatpak() {
+            let id = app
+                .updates
+                .flatpak_id()
+                .unwrap_or_else(|| "dev.rustchamber.RustChamber".into());
+            ui.label(
+                RichText::new(format!(
+                    "Updates are managed by Flathub. Run `flatpak update {id}` or use your software center."
+                ))
+                .font(theme::font(theme::TEXT_META))
+                .color(p.fg_muted),
+            );
+        } else {
+            ui.horizontal(|ui| {
+                if widgets::button(
+                    ui,
+                    "Check for updates",
+                    Some(Icon::Refresh),
+                    widgets::ButtonVariant::Outline,
+                    widgets::ButtonSize::Sm,
+                    p,
+                )
+                .clicked()
+                {
+                    app.check_for_updates();
+                }
+                if let Some(info) = app.updates.available() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Version {} is available", info.version))
+                            .font(theme::font(theme::TEXT_META))
+                            .color(p.blue),
+                    );
+                } else if app.updates.snapshot().phase == rchamber_update::Phase::Checking {
+                    ui.add_space(8.0);
+                    widgets::spinner(ui, 13.0, p.fg_muted);
+                    ui.label(
+                        RichText::new("Checking…")
+                            .font(theme::font(theme::TEXT_META))
+                            .color(p.fg_muted),
+                    );
+                } else if app.updates.snapshot().phase == rchamber_update::Phase::Idle
+                    && app.updates.snapshot().error.is_none()
+                {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Up to date")
+                            .font(theme::font(theme::TEXT_META))
+                            .color(p.fg_muted),
+                    );
+                }
+            });
+        }
         if let Some(error) = app.updates.snapshot().error.clone() {
             ui.add_space(6.0);
             ui.label(

@@ -123,6 +123,34 @@ fn discover_linux() -> Environment {
             brew: None,
         };
     }
+    if let Ok(app_id) = std::env::var("FLATPAK_ID")
+        && !app_id.trim().is_empty()
+    {
+        return Environment {
+            kind: InstallKind::External,
+            bundle: Some(executable),
+            detail: Some(format!(
+                "RustChamber is a Flatpak. Update it with `flatpak update {}`.",
+                app_id.trim()
+            )),
+            brew: None,
+        };
+    }
+    let system_package = executable.starts_with("/usr/bin")
+        || executable.starts_with("/usr/sbin")
+        || executable.starts_with("/nix/store")
+        || std::env::var_os("SNAP").is_some();
+    if system_package {
+        return Environment {
+            kind: InstallKind::External,
+            bundle: Some(executable),
+            detail: Some(
+                "RustChamber was installed by a system package manager. Update it with apt, dnf, pacman, or your distribution's package tool."
+                    .into(),
+            ),
+            brew: None,
+        };
+    }
     let writable = executable.parent().is_some_and(directory_writable);
     if !writable {
         return Environment {

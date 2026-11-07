@@ -53,18 +53,58 @@ xattr -dr com.apple.quarantine /Applications/RustChamber.app
 ### Linux
 
 Linux x86_64 builds are published on the same [Releases](https://github.com/rustchamber/rustchamber/releases)
-page as a tarball.
+page. The portable build needs glibc 2.31 or newer, which covers Ubuntu 20.04+, Debian 11+,
+Fedora 32+, RHEL 9+, openSUSE Leap 15.3+, and current Arch Linux. Pick the package for your
+distribution:
+
+```bash
+# Debian / Ubuntu / Linux Mint / Pop!_OS
+sudo apt install ./RustChamber-*-linux-x86_64.deb
+
+# Fedora / RHEL / Rocky / AlmaLinux
+sudo dnf install ./RustChamber-*-linux-x86_64.rpm
+
+# openSUSE
+sudo zypper install ./RustChamber-*-linux-x86_64.rpm
+
+# Arch / Manjaro / EndeavourOS
+sudo pacman -U ./RustChamber-*-linux-x86_64.pkg.tar.zst
+```
+
+The native packages install `/usr/bin/rchamber`, the desktop entry, the hicolor icons, and
+the AppStream metadata, and declare the X11/Wayland/OpenGL dependencies so the package
+manager pulls them in. Updates for these installs go through the package manager; the
+in-app updater opens the release page instead of replacing a system file.
+
+The tarball remains available for other distributions and for installs without root:
 
 1. Download `RustChamber-<version>-linux-x86_64.tar.gz`.
 2. Extract it and run `./install.sh`. It installs to `~/.local` and needs no sudo.
-   Running `./rchamber` from the extracted folder works too.
-3. Install the [OpenCode CLI](https://opencode.ai/docs) and make sure `opencode` is on your
-   `PATH`.
+   Running `./rchamber` from the extracted folder works too. Set `PREFIX=/usr/local` to
+   install somewhere else, and pass `--uninstall` to remove it.
+3. Install the [OpenCode CLI](https://opencode.ai/docs). RustChamber looks for `opencode`
+   in `PATH`, `~/.opencode/bin`, `~/.local/bin`, and other common locations.
 
-The tarball includes the desktop entry, hicolor icons, and AppStream metadata, so the app
-appears in the application menu after installation. Set `PREFIX=/usr/local` to install
-somewhere else. The binary needs the X11/Wayland and OpenGL libraries listed under
-[Build from source](#build-from-source).
+The tarball includes the desktop entry, hicolor icons, AppStream metadata, and
+`check-deps.sh`, which prints the exact install command for the detected distribution when
+an X11, Wayland, OpenGL, or fontconfig library is missing. Opening files and links needs
+`xdg-open` from `xdg-utils`; the native packages install it automatically.
+
+### Flatpak (Flathub)
+
+The Flatpak manifest lives in `packaging/flatpak/` and is prepared for Flathub. Once the
+app is published there:
+
+```bash
+flatpak install flathub dev.rustchamber.RustChamber
+```
+
+The Flatpak runs on the Freedesktop runtime and works on Plasma and GTK desktops. It uses
+the host's `opencode`, `git`, login shell, and file opener through `flatpak-spawn`, so
+projects, credentials, and the user's toolchain remain available. Updates go through
+Flathub (`flatpak update dev.rustchamber.RustChamber`); the in-app updater is disabled for
+Flatpak installs. See [`docs/flatpak.md`](docs/flatpak.md) for the local build and the
+Flathub submission steps.
 
 ### Updates
 
@@ -77,8 +117,9 @@ The update path follows how RustChamber was installed. A Homebrew install runs
 `brew upgrade --cask rustchamber`; a DMG install replaces the app bundle in place and
 reopens the new version. On Linux, a standalone install downloads the new tarball, verifies
 the binary inside it, replaces the executable on restart, and reopens the app. If the app
-runs from a mounted disk image, an AppImage, or a folder it cannot write to, the dialog
-links to the release instead.
+runs from a mounted disk image, an AppImage, a system package install (`/usr/bin`), or a
+folder it cannot write to, the dialog links to the release instead; package installs are
+updated by the distribution package manager.
 
 Windows packages are not published yet. Windows builds from source; they check for updates
 but open the release page instead of installing.
@@ -98,21 +139,33 @@ On Debian or Ubuntu:
 ```bash
 sudo apt install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev \
-  libfontconfig1-dev libwayland-dev
+  libegl1-mesa-dev libfontconfig1-dev libwayland-dev libx11-dev libxcursor-dev \
+  libxrandr-dev libxi-dev
 ```
 
 On Fedora:
 
 ```bash
 sudo dnf install gcc gcc-c++ make pkgconf-pkg-config libxkbcommon-devel \
-  libxkbcommon-x11-devel libxcb-devel mesa-libGL-devel fontconfig-devel \
-  wayland-devel
+  libxkbcommon-x11-devel libxcb-devel mesa-libGL-devel mesa-libEGL-devel \
+  fontconfig-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel \
+  libXi-devel
 ```
 
 On Arch Linux:
 
 ```bash
-sudo pacman -S base-devel pkgconf libxkbcommon libxcb mesa fontconfig wayland
+sudo pacman -S base-devel pkgconf libxkbcommon libxkbcommon-x11 libxcb mesa \
+  libglvnd fontconfig wayland libx11 libxcursor libxrandr libxi
+```
+
+On openSUSE:
+
+```bash
+sudo zypper install gcc gcc-c++ make pkg-config libxkbcommon-devel \
+  libxkbcommon-x11-devel libxcb-devel Mesa-libGL-devel Mesa-libEGL-devel \
+  fontconfig-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel \
+  libXi-devel
 ```
 
 HEIC attachments use `sips` on macOS and fall back to ImageMagick, `heif-convert`, or

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Open files and folders with the host desktop.
+. /app/bin/host-env.sh
+
+exec flatpak-spawn --host \
+  --env="HOME=$HOST_HOME" \
+  --env="PATH=$HOST_PATH" \
+  --env="DISPLAY=${DISPLAY:-}" \
+  --env="WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" \
+  --env="XDG_RUNTIME_DIR=/run/user/$(id -u)" \
+  xdg-open "$@"

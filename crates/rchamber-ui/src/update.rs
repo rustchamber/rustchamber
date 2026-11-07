@@ -74,6 +74,17 @@ impl UpdateCenter {
         self.updater.check();
     }
 
+    pub fn is_flatpak(&self) -> bool {
+        std::env::var_os("FLATPAK_ID").is_some()
+    }
+
+    pub fn flatpak_id(&self) -> Option<String> {
+        std::env::var("FLATPAK_ID")
+            .ok()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+    }
+
     pub fn snapshot(&self) -> &Snapshot {
         self.updater.snapshot()
     }

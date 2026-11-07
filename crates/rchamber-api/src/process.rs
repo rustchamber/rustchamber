@@ -80,6 +80,11 @@ pub async fn launch(options: LaunchOptions) -> Result<ServerHandle, ApiError> {
         .unwrap_or_else(random_password);
     let endpoint = format!("http://127.0.0.1:{port}");
 
+    tracing::debug!(
+        endpoint = %endpoint,
+        password_len = password.len(),
+        "starting managed OpenCode server"
+    );
     let mut command = Command::new(&binary);
     command
         .arg("serve")
@@ -149,13 +154,16 @@ async fn wait_ready(client: &Client, timeout: Duration) -> Result<ServerInfo, Ap
     let started = tokio::time::Instant::now();
     let mut last: Option<ApiError> = None;
     while started.elapsed() < timeout {
-        match client.info().await {
-            Ok(info) => return Ok(info),
-            Err(err) => last = Some(err),
+        match tokio::time::timeout(Duration::from_secs(2), client.info()).await {
+            Ok(Ok(info)) => return Ok(info),
+            Ok(Err(err)) => last = Some(err),
+            Err(_) => last = Some(ApiError::Other("health request timed out".into())),
         }
         tokio::time::sleep(Duration::from_millis(180)).await;
     }
-    Err(last.unwrap_or_else(|| ApiError::Other("server did not become ready".into())))
+    let error = last.unwrap_or_else(|| ApiError::Other("server did not become ready".into()));
+    tracing::debug!(error = %error, "OpenCode server did not become ready");
+    Err(error)
 }
 
 fn readable_directory(directory: Option<&Path>) -> Option<String> {
@@ -204,13 +212,26 @@ pub fn find_opencode_binary() -> Option<PathBuf> {
             }
         }
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let candidate = home.join(".opencode").join("bin").join(if cfg!(windows) {
+    let file = if cfg!(windows) {
         "opencode.exe"
     } else {
         "opencode"
-    });
-    candidate.is_file().then_some(candidate)
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut candidates = Vec::new();
+    if let Some(home) = &home {
+        // The official installer and common package layouts. A desktop session
+        // launched from the application menu often has a shorter PATH than an
+        // interactive shell, so these must not depend on PATH alone.
+        candidates.push(home.join(".opencode").join("bin").join(file));
+        candidates.push(home.join(".local").join("bin").join(file));
+        candidates.push(home.join(".bun").join("bin").join(file));
+        candidates.push(home.join(".npm-global").join("bin").join(file));
+    }
+    candidates.push(PathBuf::from("/opt/opencode/bin").join(file));
+    candidates.push(PathBuf::from("/usr/local/bin").join(file));
+    candidates.push(PathBuf::from("/usr/bin").join(file));
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 pub fn default_workspace() -> PathBuf {

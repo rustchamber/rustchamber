@@ -1,0 +1,100 @@
+# nFPM template for the Linux packages.
+#
+# scripts/package-linux.sh renders this file into dist/nfpm.yaml, replacing the
+# ${VERSION}, ${NFPM_ARCH}, ${STAGE} and ${ROOT} placeholders, and then asks nfpm to
+# build the deb, rpm and Arch packages.
+#
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: rustchamber
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+section: devel
+priority: optional
+maintainer: Felipe Silva Machado <silvalipe765@gmail.com>
+description: |
+  Native desktop workspace for OpenCode, written in Rust with egui.
+
+  Chat, terminal, files, changes, and git live in the same window, with a
+  keyboard-first interface built for long agent sessions. RustChamber starts a
+  managed `opencode serve` process by default; the OpenCode CLI must be
+  installed separately.
+vendor: RustChamber
+homepage: https://rustchamber.lipecode.com
+license: MIT
+provides:
+  - rchamber
+contents:
+  - src: ${STAGE}/rchamber
+    dst: /usr/bin/rchamber
+    file_info:
+      mode: 0755
+  - src: ${ROOT}/packaging/linux/dev.rustchamber.RustChamber.desktop
+    dst: /usr/share/applications/dev.rustchamber.RustChamber.desktop
+  - src: ${ROOT}/packaging/linux/dev.rustchamber.RustChamber.metainfo.xml
+    dst: /usr/share/metainfo/dev.rustchamber.RustChamber.metainfo.xml
+  - src: ${ROOT}/packaging/linux/icons/hicolor/128x128/apps/dev.rustchamber.RustChamber.png
+    dst: /usr/share/icons/hicolor/128x128/apps/dev.rustchamber.RustChamber.png
+  - src: ${ROOT}/packaging/linux/icons/hicolor/256x256/apps/dev.rustchamber.RustChamber.png
+    dst: /usr/share/icons/hicolor/256x256/apps/dev.rustchamber.RustChamber.png
+  - src: ${ROOT}/packaging/linux/icons/hicolor/512x512/apps/dev.rustchamber.RustChamber.png
+    dst: /usr/share/icons/hicolor/512x512/apps/dev.rustchamber.RustChamber.png
+  - src: ${ROOT}/LICENSE
+    dst: /usr/share/doc/rustchamber/LICENSE
+  - src: ${ROOT}/NOTICE
+    dst: /usr/share/doc/rustchamber/NOTICE
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.31)
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - libxcb1
+      - libgl1
+      - libegl1
+      - libfontconfig1
+      - libwayland-client0
+      - libx11-6
+      - libxcursor1
+      - libxrandr2
+      - libxi6
+      - xdg-utils
+    scripts:
+      postinstall: ${ROOT}/packaging/linux/scripts/postinstall.sh
+      postremove: ${ROOT}/packaging/linux/scripts/postremove.sh
+  rpm:
+    depends:
+      - glibc >= 2.31
+      - libxkbcommon.so.0()(64bit)
+      - libxkbcommon-x11.so.0()(64bit)
+      - libxcb.so.1()(64bit)
+      - libGL.so.1()(64bit)
+      - libEGL.so.1()(64bit)
+      - libfontconfig.so.1()(64bit)
+      - libwayland-client.so.0()(64bit)
+      - libX11.so.6()(64bit)
+      - libXcursor.so.1()(64bit)
+      - libXrandr.so.2()(64bit)
+      - libXi.so.6()(64bit)
+      - /usr/bin/xdg-open
+    scripts:
+      postinstall: ${ROOT}/packaging/linux/scripts/postinstall.sh
+      postremove: ${ROOT}/packaging/linux/scripts/postremove.sh
+  archlinux:
+    depends:
+      - glibc
+      - libxkbcommon
+      - libxkbcommon-x11
+      - libxcb
+      - mesa
+      - libglvnd
+      - fontconfig
+      - wayland
+      - libx11
+      - libxcursor
+      - libxrandr
+      - libxi
+      - xdg-utils
+    scripts:
+      postinstall: ${ROOT}/packaging/linux/scripts/postinstall.sh
+      postremove: ${ROOT}/packaging/linux/scripts/postremove.sh

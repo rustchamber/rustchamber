@@ -151,7 +151,7 @@ fn convert_heic(path: &Path) -> Result<Vec<u8>, String> {
             ("magick", &["-quality", "90"]),
             ("convert", &["-quality", "90"]),
             ("heif-convert", &[]),
-            ("ffmpeg", &["-y", "-loglevel", "error"]),
+            ("ffmpeg", &["-y", "-loglevel", "error", "-i"]),
         ]
     };
     for (program, args) in attempts {

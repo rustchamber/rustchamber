@@ -66,39 +66,37 @@ jobs:
             dist/*.zip
 
   linux:
+    # The container pins glibc 2.31 so the published binary runs on Ubuntu
+    # 20.04+, Debian 11+, Fedora 32+, RHEL 9, openSUSE Leap and current Arch,
+    # instead of inheriting the (much newer) glibc of the GitHub runner.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev \
-            libxkbcommon-x11-dev libxcb-render0-dev libxcb-shape0-dev \
-            libxcb-xfixes0-dev libgl1-mesa-dev libfontconfig1-dev libwayland-dev
 
       - name: Set version
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           else
-            VERSION="$(cargo metadata --no-deps --format-version 1 \
-              | jq -r '.packages[] | select(.name == "rchamber") | .version')"
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
             echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           fi
 
-      - name: Build Linux package
+      - name: Build portable Linux packages
         env:
           VERSION: ${{ env.VERSION }}
           RCHAMBER_VERSION: ${{ env.VERSION }}
-        run: bash scripts/package-linux.sh
+        run: bash scripts/package-linux-container.sh
 
       - uses: actions/upload-artifact@v4
         with:
           name: RustChamber-linux
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/*.sha256
 
   publish:
     needs: [macos, linux]

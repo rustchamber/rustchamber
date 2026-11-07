@@ -1,0 +1,62 @@
+# Local Flatpak manifest for development.
+#
+# Flathub uses dev.rustchamber.RustChamber.yml (git source pinned to a tag).
+# This file builds the current checkout instead, so it is convenient for
+# testing before a release exists.
+
+app-id: dev.rustchamber.RustChamber
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: rchamber
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=ssh-auth
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Flatpak
+  - --env=RCHAMBER_OPENCODE_BIN=/app/bin/opencode
+modules:
+  - name: rustchamber
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/rustchamber/cargo
+        CARGO_NET_OFFLINE: 'true'
+        RCHAMBER_VERSION: 0.2.7-beta
+    build-commands:
+      - cargo build --release --locked --offline
+      - install -Dm755 target/release/rchamber /app/bin/rchamber
+      - install -Dm644 packaging/linux/dev.rustchamber.RustChamber.desktop /app/share/applications/dev.rustchamber.RustChamber.desktop
+      - install -Dm644 packaging/linux/dev.rustchamber.RustChamber.metainfo.xml /app/share/metainfo/dev.rustchamber.RustChamber.metainfo.xml
+      - for size in 128 256 512; do install -Dm644 "packaging/linux/icons/hicolor/${size}x${size}/apps/dev.rustchamber.RustChamber.png" "/app/share/icons/hicolor/${size}x${size}/apps/dev.rustchamber.RustChamber.png"; done
+      - install -Dm644 LICENSE /app/share/doc/rustchamber/LICENSE
+      - install -Dm644 NOTICE /app/share/doc/rustchamber/NOTICE
+      - install -Dm644 README.md /app/share/doc/rustchamber/README.md
+      - install -Dm755 packaging/flatpak/bin/opencode /app/bin/opencode
+      - install -Dm755 packaging/flatpak/bin/git /app/bin/git
+      - install -Dm755 packaging/flatpak/bin/host-shell /app/bin/host-shell
+      - install -Dm755 packaging/flatpak/bin/xdg-open /app/bin/xdg-open
+      - install -Dm755 packaging/flatpak/bin/magick /app/bin/magick
+      - install -Dm755 packaging/flatpak/bin/convert /app/bin/convert
+      - install -Dm755 packaging/flatpak/bin/heif-convert /app/bin/heif-convert
+      - install -Dm755 packaging/flatpak/bin/ffmpeg /app/bin/ffmpeg
+      - install -Dm644 packaging/flatpak/bin/host-env.sh /app/bin/host-env.sh
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - target
+          - dist
+          - labs
+          - build-dir
+          - repo
+          - packaging/flatpak/cargo-sources.json
+      - cargo-sources.json

@@ -21,6 +21,7 @@ pub mod rail;
 pub mod settings;
 pub mod sidebar;
 pub mod surfaces;
+mod system_theme;
 pub mod theme;
 pub mod theme_store;
 pub mod update;

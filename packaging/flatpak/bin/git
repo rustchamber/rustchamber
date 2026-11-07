@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run git on the host so credentials, SSH keys and the user's toolchain apply.
+. /app/bin/host-env.sh
+
+exec flatpak-spawn --host \
+  --directory="$PWD" \
+  --env="HOME=$HOST_HOME" \
+  --env="PATH=$HOST_PATH" \
+  sh -c 'exec git "$@"' sh "$@"

@@ -100,10 +100,23 @@ On Linux, the packaging script builds for the host by default:
 bash scripts/package-linux.sh
 ```
 
-It writes `dist/RustChamber-<version>-linux-<arch>.tar.gz`. The asset name follows `ARCH`,
-which defaults to the host architecture, or to `TARGET` when that is set. For a cross build,
-set `TARGET=aarch64-unknown-linux-gnu` and install that Rust target and linker. The script
-needs `jq`, `tar`, and the system libraries listed in the README.
+It writes `dist/RustChamber-<version>-linux-<arch>.tar.gz`. When nfpm is on `PATH` (or
+`NFPM=/path/to/nfpm` is set) it also writes the `.deb`, `.rpm`, and Arch `.pkg.tar.zst`
+packages. Setting `PACKAGES=1` makes a missing nfpm an error; `PACKAGES=0` builds only the
+tarball. The asset name follows `ARCH`, which defaults to the host architecture, or to
+`TARGET` when that is set. For a cross build, set `TARGET=aarch64-unknown-linux-gnu` and
+install that Rust target and linker. The script needs `jq` and `tar`; nfpm is required for
+the native packages, and the build needs the system libraries listed in the README.
+
+To produce the portable release exactly as CI does (glibc 2.31, packages included):
+
+```bash
+bash scripts/package-linux-container.sh
+```
+
+This needs podman or docker, downloads `ubuntu:20.04` and nfpm, and refuses to finish if
+the resulting binary needs a glibc newer than 2.31. Override the image with
+`LINUX_BUILD_IMAGE` when testing a different floor.
 
 ## Signing and notarization
 
@@ -148,19 +161,40 @@ The release workflow has three jobs:
 
 1. `macos` builds the universal app, signs and notarizes it when the Apple secrets exist,
    and uploads the DMG and ZIP as workflow artifacts.
-2. `linux` builds and packages the tarball on `ubuntu-24.04`, then uploads it as a workflow
-   artifact. The job installs the X11, Wayland, OpenGL, fontconfig, and xkbcommon
-   development packages before building.
+2. `linux` runs `scripts/package-linux-container.sh` on `ubuntu-24.04`. That script starts
+   an `ubuntu:20.04` container, installs the X11/Wayland/OpenGL build dependencies, builds
+   the binary, and runs nfpm to produce the tarball, the `.deb`, the `.rpm`, the Arch
+   `.pkg.tar.zst`, and a `.sha256` file. The container pins the glibc floor at 2.31; the
+   script fails if the binary references a newer `GLIBC_*` symbol. Building on the runner
+   directly would inherit glibc 2.39 and break Ubuntu 22.04, Debian 12, RHEL 9, and other
+   supported systems.
 3. `publish` runs after both succeed, creates the GitHub release as a draft, uploads every
    artifact, and publishes it. Keeping the release creation in one job avoids two builds
    racing to create the same tag.
 
-The Linux tarball layout is:
+The published Linux assets are:
+
+```
+RustChamber-<version>-linux-x86_64.tar.gz
+RustChamber-<version>-linux-x86_64.deb
+RustChamber-<version>-linux-x86_64.rpm
+RustChamber-<version>-linux-x86_64.pkg.tar.zst
+RustChamber-<version>-linux-x86_64.sha256
+```
+
+The `.deb` targets Debian/Ubuntu (glibc 2.31, `libxkbcommon`, `libxcb`, `libgl1`,
+`libwayland-client0`, and the X11 cursor/randr/xi libraries). The `.rpm` uses soname
+requirements so it resolves on Fedora, RHEL, and openSUSE. The Arch package uses native
+package names. All three install `/usr/bin/rchamber`, the desktop entry, the icons, and the
+AppStream metadata, and refresh the desktop/icon caches in the package scripts.
+
+The tarball layout is:
 
 ```
 RustChamber-<version>-linux-x86_64/
 ├── rchamber
 ├── install.sh
+├── check-deps.sh
 ├── README.md
 ├── LICENSE
 ├── NOTICE
@@ -170,19 +204,45 @@ RustChamber-<version>-linux-x86_64/
     └── metainfo/dev.rustchamber.RustChamber.metainfo.xml
 ```
 
-`install.sh` installs under `$PREFIX` (default `$HOME/.local`) and rewrites the desktop
-entry's `Exec` line to the absolute binary path, so the application menu works without
-`~/.local/bin` being on the session `PATH`. Users can also extract the tarball and run
-`./rchamber` directly.
+`install.sh` installs under `$PREFIX` (default `$HOME/.local`), rewrites the desktop
+entry's `Exec` line to the absolute binary path so the application menu works without
+`~/.local/bin` on the session `PATH`, and runs `check-deps.sh`, which prints the
+distribution-specific install command for any missing X11/Wayland/OpenGL library. Pass
+`--uninstall` to remove the installed files while keeping settings.
 
 The in-app updater treats a writable standalone binary as a native install. It downloads
 the tarball, unpacks it in the cache directory, runs the staged binary with `--version` to
 confirm the release, then swaps the executable after the app exits and relaunches it. An
-AppImage sets `APPIMAGE`, and a binary installed in a read-only directory, is reported as an
-external install: the update dialog opens the release page instead of attempting a write.
+AppImage sets `APPIMAGE`, and a binary installed in a read-only directory (including
+`/usr/bin/rchamber` from a package), is reported as an external install: the update dialog
+opens the release page instead of attempting a write.
 
 Builds for other architectures use the same asset naming scheme
-(`RustChamber-<version>-linux-aarch64.tar.gz`) and need a matching `linux` matrix entry.
+(`RustChamber-<version>-linux-aarch64.*`) and need a matching `linux` matrix entry and an
+aarch64 build container. The package script maps `x86_64` to `amd64` and `aarch64` to
+`arm64` for nfpm.
+
+## Flatpak and Flathub
+
+The Flatpak manifest lives in `packaging/flatpak/`. `dev.rustchamber.RustChamber.yml` is the
+Flathub manifest; `dev.rustchamber.RustChamber.local.yml` builds the current checkout. The
+latter is what the `Flatpak` workflow builds.
+
+For each release:
+
+1. Bump `RCHAMBER_VERSION` in both manifests and add the tag/commit to the Flathub
+   manifest.
+2. Regenerate `packaging/flatpak/cargo-sources.json` from `Cargo.lock`.
+3. Add the matching `<release>` entry to the AppStream metainfo.
+4. Run `flatpak-builder --user --install --force-clean ...local.yml` and test the app.
+5. Update the Flathub repository with a PR containing the new manifest/tag/commit.
+6. Flathub builds and hosts the update; the app itself must not self-update inside the
+   sandbox.
+
+The app ID is `dev.rustchamber.RustChamber` and the project owns `rustchamber.dev`.
+`--filesystem=home` covers normal projects; `--talk-name=org.freedesktop.Flatpak` is
+needed for the host OpenCode, git, shell, and file opener. See [`flatpak.md`](flatpak.md)
+for the full local build and submission instructions.
 
 Windows is still unsupported. Adding it means a `windows-2025` job that packages
 `rchamber.exe` with the icon and a ZIP, plus a `windows_zip` arm in the updater.
@@ -200,5 +260,12 @@ Windows is still unsupported. Adding it means a `windows-2025` job that packages
 - [ ] Release assets present and the DMG opens
 - [ ] `RustChamber-<version>-linux-x86_64.tar.gz` extracts, `./rchamber --version` matches,
       and `./install.sh` adds a desktop entry
+- [ ] The Linux binary reports `GLIBC_2.31` or older as its highest `GLIBC_*` symbol
+- [ ] `.deb`, `.rpm`, and `.pkg.tar.zst` install `/usr/bin/rchamber` and the desktop entry
+- [ ] `check-deps.sh` names the right install command on Debian, Fedora, Arch, and openSUSE
+- [ ] `packaging/flatpak/cargo-sources.json` regenerated from `Cargo.lock`
+- [ ] `flatpak-builder` builds `dev.rustchamber.RustChamber.local.yml`
+- [ ] The Flatpak app starts, connects to host OpenCode, and opens the host shell/git
+- [ ] Flathub manifest uses the new tag and commit
 - [ ] Homebrew cask updated by the `homebrew` job
 - [ ] `brew install --cask rustchamber/tap/rustchamber` opens without a Gatekeeper prompt

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Open the host's login shell in the current project directory.
+. /app/bin/host-env.sh
+
+exec flatpak-spawn --watch-bus --host \
+  --directory="$PWD" \
+  --env="HOME=$HOST_HOME" \
+  --env="PATH=$HOST_PATH" \
+  --env="SHELL=$HOST_SHELL" \
+  --env="TERM=${TERM:-xterm-256color}" \
+  --env="COLORTERM=${COLORTERM:-truecolor}" \
+  "$HOST_SHELL" -l

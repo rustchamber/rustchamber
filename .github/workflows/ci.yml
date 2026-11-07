@@ -46,5 +46,12 @@ jobs:
       - name: Check Linux packaging scripts
         if: runner.os == 'Linux'
         run: |
-          bash -n scripts/package-linux.sh
-          bash -n packaging/linux/install.sh
+          for script in scripts/package-linux.sh \
+            scripts/package-linux-container.sh \
+            scripts/package-linux-in-container.sh; do
+            bash -n "$script"
+          done
+          sh -n packaging/linux/install.sh
+          sh -n packaging/linux/check-deps.sh
+          sh -n packaging/linux/scripts/postinstall.sh
+          sh -n packaging/linux/scripts/postremove.sh

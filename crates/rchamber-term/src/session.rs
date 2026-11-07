@@ -224,9 +224,12 @@ impl Drop for Terminal {
 }
 
 fn shell() -> String {
+    if let Some(shell) = flatpak_shell() {
+        return shell;
+    }
     if let Ok(value) = std::env::var("SHELL") {
         let value = value.trim();
-        if !value.is_empty() {
+        if !value.is_empty() && Path::new(value).is_file() {
             return value.to_string();
         }
     }
@@ -235,8 +238,26 @@ fn shell() -> String {
     } else if cfg!(target_os = "macos") {
         "/bin/zsh".into()
     } else {
-        "/bin/bash".into()
+        // Minimal and non-FHS distributions may not ship bash.
+        for candidate in ["/bin/bash", "/bin/sh"] {
+            if Path::new(candidate).is_file() {
+                return candidate.into();
+            }
+        }
+        "sh".into()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_shell() -> Option<String> {
+    std::env::var_os("FLATPAK_ID")?;
+    let wrapper = "/app/bin/host-shell";
+    Path::new(wrapper).is_file().then(|| wrapper.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn flatpak_shell() -> Option<String> {
+    None
 }
 
 #[cfg(test)]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# HEIC conversion fallback: run ffmpeg on the host.
+. /app/bin/host-env.sh
+exec flatpak-spawn --host --env="HOME=$HOST_HOME" --env="PATH=$HOST_PATH" \
+  sh -c 'exec ffmpeg "$@"' sh "$@"
