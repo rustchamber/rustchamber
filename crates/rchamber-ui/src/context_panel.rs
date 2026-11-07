@@ -21,7 +21,12 @@ const SIDE_PAD: f32 = 12.0;
 const VALUE_MIN: f32 = 40.0;
 const LABEL_MIN: f32 = 24.0;
 const MENU_WIDTH: f32 = 184.0;
+#[cfg(target_os = "macos")]
 const OPEN_APPS: [&str; 6] = ["Finder", "Terminal", "iTerm2", "Cursor", "Zed", "Trae"];
+#[cfg(target_os = "linux")]
+const OPEN_APPS: [&str; 5] = ["File manager", "Terminal", "VS Code", "Cursor", "Zed"];
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const OPEN_APPS: [&str; 5] = ["Explorer", "Terminal", "VS Code", "Cursor", "Zed"];
 const SECTION_KEYS: [&str; 4] = ["turn-stats", "subagents", "mcp", "sources"];
 const MAX_SUBAGENTS: usize = 8;
 const USAGE_NOTE: &str = "Not reported by this server";

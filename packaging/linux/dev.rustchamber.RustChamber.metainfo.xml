@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.rustchamber.RustChamber</id>
+  <name>RustChamber</name>
+  <summary>Native desktop workspace for OpenCode</summary>
+  <developer id="dev.rustchamber">
+    <name>Felipe Silva Machado</name>
+  </developer>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      RustChamber is a native desktop workspace for OpenCode written in Rust with egui.
+      Chat, terminal, files, changes, and git live in the same window, with a
+      keyboard-first interface built for long agent sessions.
+    </p>
+    <ul>
+      <li>Streaming chat with Markdown, reasoning, tools, and permission prompts</li>
+      <li>Real PTY terminal with tabs, colors, and scrollback</li>
+      <li>Project tree, editor, session diffs, and native git operations</li>
+      <li>Managed OpenCode server lifecycle or an existing remote endpoint</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">dev.rustchamber.RustChamber.desktop</launchable>
+  <url type="homepage">https://rustchamber.lipecode.com</url>
+  <url type="bugtracker">https://github.com/rustchamber/rustchamber/issues</url>
+  <url type="vcs-browser">https://github.com/rustchamber/rustchamber</url>
+  <categories>
+    <category>Development</category>
+    <category>IDE</category>
+  </categories>
+  <keywords>
+    <keyword>opencode</keyword>
+    <keyword>ai</keyword>
+    <keyword>agent</keyword>
+    <keyword>terminal</keyword>
+    <keyword>git</keyword>
+  </keywords>
+  <provides>
+    <binary>rchamber</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

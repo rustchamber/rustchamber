@@ -2,6 +2,31 @@ use serde::Deserialize;
 
 pub const RELEASES_URL: &str = "https://github.com/rustchamber/rustchamber/releases";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    Macos,
+    Linux,
+    Windows,
+}
+
+pub const fn current_platform() -> Platform {
+    if cfg!(target_os = "macos") {
+        Platform::Macos
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    }
+}
+
+pub const fn platform_name(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Macos => "macOS",
+        Platform::Linux => "Linux",
+        Platform::Windows => "Windows",
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Release {
     #[serde(default)]
@@ -70,6 +95,46 @@ impl Release {
             name.ends_with(".dmg") && name.contains("macos")
         })
     }
+
+    pub fn linux_tarball(&self) -> Option<&Asset> {
+        self.linux_tarball_for_arch(std::env::consts::ARCH)
+    }
+
+    pub fn linux_tarball_for_arch(&self, arch: &str) -> Option<&Asset> {
+        let tarballs = || {
+            self.assets.iter().filter(|asset| {
+                let name = asset.name.to_ascii_lowercase();
+                name.ends_with(".tar.gz") && name.contains("linux")
+            })
+        };
+        tarballs()
+            .find(|asset| asset.name.to_ascii_lowercase().contains(arch))
+            .or_else(|| tarballs().next())
+            .or_else(|| {
+                self.assets
+                    .iter()
+                    .find(|asset| asset.name.to_ascii_lowercase().ends_with(".tar.gz"))
+            })
+    }
+
+    pub fn windows_zip(&self) -> Option<&Asset> {
+        self.assets.iter().find(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            name.ends_with(".zip") && name.contains("windows")
+        })
+    }
+
+    pub fn platform_asset_for(&self, platform: Platform) -> Option<&Asset> {
+        match platform {
+            Platform::Macos => self.macos_zip(),
+            Platform::Linux => self.linux_tarball(),
+            Platform::Windows => self.windows_zip(),
+        }
+    }
+
+    pub fn platform_asset(&self) -> Option<&Asset> {
+        self.platform_asset_for(current_platform())
+    }
 }
 
 pub fn parse_tag(tag: &str) -> Option<semver::Version> {
@@ -81,6 +146,14 @@ pub fn parse_releases(body: &[u8]) -> Result<Vec<Release>, String> {
 }
 
 pub fn pick_release(releases: &[Release], current: &semver::Version) -> Option<Release> {
+    pick_release_for(releases, current, current_platform())
+}
+
+pub fn pick_release_for(
+    releases: &[Release],
+    current: &semver::Version,
+    platform: Platform,
+) -> Option<Release> {
     let mut best: Option<(semver::Version, Release)> = None;
     for release in releases {
         if release.draft {
@@ -95,7 +168,7 @@ pub fn pick_release(releases: &[Release], current: &semver::Version) -> Option<R
         if version <= *current {
             continue;
         }
-        if release.macos_zip().is_none() {
+        if release.platform_asset_for(platform).is_none() {
             continue;
         }
         if best
@@ -148,8 +221,12 @@ pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
             .filter(|notes| !notes.trim().is_empty());
         let dmg_name = format!("RustChamber-{version}-macos-universal.dmg");
         let zip_name = format!("RustChamber-{version}-macos-universal.zip");
+        let linux_name = format!("RustChamber-{version}-linux-x86_64.tar.gz");
+        let windows_name = format!("RustChamber-{version}-windows-x86_64.zip");
         let dmg_url = format!("{RELEASES_URL}/download/{tag}/{dmg_name}");
         let zip_url = format!("{RELEASES_URL}/download/{tag}/{zip_name}");
+        let linux_url = format!("{RELEASES_URL}/download/{tag}/{linux_name}");
+        let windows_url = format!("{RELEASES_URL}/download/{tag}/{windows_name}");
         releases.push(Release {
             tag_name: tag.to_string(),
             name: title,
@@ -168,6 +245,18 @@ pub fn parse_atom(body: &str) -> Result<Vec<Release>, String> {
                 Asset {
                     name: zip_name,
                     browser_download_url: zip_url,
+                    size: 0,
+                    digest: None,
+                },
+                Asset {
+                    name: linux_name,
+                    browser_download_url: linux_url,
+                    size: 0,
+                    digest: None,
+                },
+                Asset {
+                    name: windows_name,
+                    browser_download_url: windows_url,
                     size: 0,
                     digest: None,
                 },
@@ -325,7 +414,7 @@ mod tests {
             no_asset,
             release("v0.2.0", false, &[(ZIP, 10)]),
         ];
-        let picked = pick_release(&releases, &current).unwrap();
+        let picked = pick_release_for(&releases, &current, Platform::Macos).unwrap();
         assert_eq!(picked.tag_name, "v0.2.0");
     }
 
@@ -337,7 +426,7 @@ mod tests {
             release("v0.1.0", false, &[(ZIP, 10)]),
         ];
         assert_eq!(
-            pick_release(&releases, &current).map(|r| r.tag_name),
+            pick_release_for(&releases, &current, Platform::Macos).map(|r| r.tag_name),
             Some("v0.2.0-beta.1".into())
         );
     }
@@ -350,7 +439,7 @@ mod tests {
             release("v0.2.1", false, &[(ZIP, 10)]),
         ];
         assert_eq!(
-            pick_release(&releases, &current).map(|r| r.tag_name),
+            pick_release_for(&releases, &current, Platform::Macos).map(|r| r.tag_name),
             Some("v0.2.1".into())
         );
     }
@@ -381,6 +470,65 @@ mod tests {
         );
         assert_eq!(release.macos_dmg().unwrap().size, 64);
         assert_eq!(release.macos_zip().unwrap().size, 42);
+    }
+
+    #[test]
+    fn picks_the_linux_tarball() {
+        let release = release(
+            "v0.2.0",
+            false,
+            &[(ZIP, 42), ("RustChamber-0.2.0-linux-x86_64.tar.gz", 52)],
+        );
+        assert_eq!(release.linux_tarball().unwrap().size, 52);
+        assert_eq!(
+            release.platform_asset_for(Platform::Linux).unwrap().name,
+            "RustChamber-0.2.0-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn picks_the_matching_linux_architecture() {
+        let release = release(
+            "v0.2.0",
+            false,
+            &[
+                ("RustChamber-0.2.0-linux-x86_64.tar.gz", 52),
+                ("RustChamber-0.2.0-linux-aarch64.tar.gz", 54),
+            ],
+        );
+        assert_eq!(
+            release.linux_tarball_for_arch("aarch64").unwrap().name,
+            "RustChamber-0.2.0-linux-aarch64.tar.gz"
+        );
+        assert_eq!(
+            release.linux_tarball_for_arch("x86_64").unwrap().name,
+            "RustChamber-0.2.0-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn release_needs_an_asset_for_the_current_platform() {
+        let current = semver::Version::parse("0.1.0").unwrap();
+        let releases = vec![
+            release("v0.2.0", false, &[(ZIP, 10)]),
+            release(
+                "v0.3.0",
+                false,
+                &[("RustChamber-0.3.0-linux-x86_64.tar.gz", 10)],
+            ),
+        ];
+        assert_eq!(
+            pick_release_for(&releases, &current, Platform::Linux).map(|r| r.tag_name),
+            Some("v0.3.0".into())
+        );
+        assert_eq!(
+            pick_release_for(&releases, &current, Platform::Macos).map(|r| r.tag_name),
+            Some("v0.2.0".into())
+        );
+        assert_eq!(
+            pick_release_for(&releases, &current, Platform::Windows).map(|r| r.tag_name),
+            None
+        );
     }
 
     #[test]
@@ -431,9 +579,19 @@ mod tests {
             releases[0].macos_zip().unwrap().browser_download_url,
             "https://github.com/rustchamber/rustchamber/releases/download/v0.2.1-beta/RustChamber-0.2.1-beta-macos-universal.zip"
         );
+        assert_eq!(
+            releases[0].linux_tarball().unwrap().browser_download_url,
+            "https://github.com/rustchamber/rustchamber/releases/download/v0.2.1-beta/RustChamber-0.2.1-beta-linux-x86_64.tar.gz"
+        );
         let current = semver::Version::parse("0.2.0-beta").unwrap();
         assert_eq!(
-            pick_release(&releases, &current)
+            pick_release_for(&releases, &current, Platform::Macos)
+                .and_then(|release| release.version())
+                .map(|version| version.to_string()),
+            Some("0.2.1-beta".into())
+        );
+        assert_eq!(
+            pick_release_for(&releases, &current, Platform::Linux)
                 .and_then(|release| release.version())
                 .map(|version| version.to_string()),
             Some("0.2.1-beta".into())

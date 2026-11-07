@@ -37,5 +37,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev \
+            libxkbcommon-x11-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libgl1-mesa-dev libfontconfig1-dev libwayland-dev
       - run: cargo check --workspace --all-targets
+      - name: Check Linux packaging scripts
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/package-linux.sh
+          bash -n packaging/linux/install.sh

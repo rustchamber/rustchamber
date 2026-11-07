@@ -33,6 +33,10 @@ fn start_inset(ctx: &egui::Context) -> f32 {
     }
 }
 
+fn shortcut(key: &str) -> String {
+    crate::widgets::shortcut_label(key)
+}
+
 pub fn new_session_width(ctx: &egui::Context) -> f32 {
     let galley = ctx.fonts_mut(|fonts| {
         fonts.layout_no_wrap(
@@ -112,14 +116,18 @@ pub fn titlebar_controls(ctx: &egui::Context, app: &mut RustChamber, p: &Palette
             ui.spacing_mut().item_spacing = Vec2::new(CLUSTER_GAP, 0.0);
             ui.horizontal(|ui| {
                 let button = control(ui, p, Icon::Sidebar, None, open, CONTROLS_SIZE);
-                toggle = button.on_hover_text("Toggle sidebar (⌘B)").clicked();
+                toggle = button
+                    .on_hover_text(format!("Toggle sidebar ({})", shortcut("B")))
+                    .clicked();
                 let room = (cap - CONTROLS_SIZE - CLUSTER_GAP).max(CONTROLS_SIZE);
                 let label = open.then_some(NEW_SESSION_LABEL);
                 let button = control(ui, p, Icon::Plus, label, false, room);
                 create = if open {
                     button.clicked()
                 } else {
-                    button.on_hover_text("New session (⌘N)").clicked()
+                    button
+                        .on_hover_text(format!("New session ({})", shortcut("N")))
+                        .clicked()
                 };
             });
         });

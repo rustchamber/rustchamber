@@ -1603,7 +1603,16 @@ fn toolbar(
             buffer.wrap = !buffer.wrap;
         }
         if save_width > 0.0
-            && toolbar_chip(ui, p, "Save", false, dirty, dirty, "Save file (⌘S)").clicked()
+            && toolbar_chip(
+                ui,
+                p,
+                "Save",
+                false,
+                dirty,
+                dirty,
+                &format!("Save file ({})", crate::widgets::shortcut_label("S")),
+            )
+            .clicked()
         {
             result.save = true;
         }

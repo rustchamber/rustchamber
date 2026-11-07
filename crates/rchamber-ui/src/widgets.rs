@@ -605,6 +605,14 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tint: Color32) -> Respons
     icon_button_hit(ui, icon, size, hit, tint)
 }
 
+pub fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Show in Finder"
+    } else {
+        "Show in folder"
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn reveal_in_finder(path: &std::path::Path) -> std::io::Result<()> {
     std::process::Command::new("open")
@@ -2239,6 +2247,14 @@ pub fn textarea_ex(
         stroke,
     );
     response
+}
+
+pub fn shortcut_label(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("⌘{key}")
+    } else {
+        format!("Ctrl+{key}")
+    }
 }
 
 pub fn menu_item(

@@ -2,6 +2,14 @@ use rchamber_ui::RustChamber;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result<()> {
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("RustChamber {}", app_version());
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new(
@@ -49,4 +57,10 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(RustChamber::new(cc)))),
     )
+}
+
+fn app_version() -> &'static str {
+    option_env!("RCHAMBER_VERSION")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
 }

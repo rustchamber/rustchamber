@@ -26,7 +26,7 @@ something changed, so an idle window costs almost no CPU.
 | `rchamber-api` | HTTP client, SSE subscription, typed wire models, server process lifecycle |
 | `rchamber-git` | Git CLI wrapper with timeouts and porcelain parsing |
 | `rchamber-term` | PTY sessions and a VT emulator |
-| `rchamber-update` | Release discovery, background download, signature checks, and self-install |
+| `rchamber-update` | Release discovery, platform asset selection, background download, verification, and self-install |
 | `rchamber-app` | Action and event types, backend actor, state projection, project/session store, drafts, attachments, snippets |
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theme engine |
 | `rchamber` | Binary entry point |
@@ -144,7 +144,8 @@ compiled into the binary.
   key encoding, and theme resolution.
 - `cargo clippy --workspace --all-targets -- -D warnings` is clean.
 - CI checks formatting, lints, and tests, then builds the workspace on Linux, macOS, and
-  Windows.
+  Windows. `scripts/package-linux.sh` produces the Linux release tarball used by the release
+  workflow.
 
 `RCHAMBER_SCREENSHOT=/path/out.png` runs the app off-screen, captures one frame after the
 backend settles, and exits. It is used for the screenshots in this repository.
@@ -153,5 +154,5 @@ backend settles, and exits. It is used for the screenshots in this repository.
 
 The app reads provider, agent, command, and skill catalogs but does not write their
 configuration. It does not bundle the OpenCode binary; the CLI is installed separately.
-There is no embedded browser, plugin host, or auto-updater. These are deliberate limits of
+There is no embedded browser, plugin host, or silent updater. These are deliberate limits of
 the current scope, not hidden placeholders.

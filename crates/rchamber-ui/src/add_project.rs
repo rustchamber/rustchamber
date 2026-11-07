@@ -1214,7 +1214,11 @@ fn footer(
         if let Some(path) = finder
             && widgets::button_ex(
                 ui,
-                "Open in Finder",
+                if cfg!(target_os = "macos") {
+                    "Open in Finder"
+                } else {
+                    "Open in folder"
+                },
                 Some(Icon::FolderOpen),
                 ButtonVariant::Outline,
                 ButtonSize::Sm,

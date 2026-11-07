@@ -350,7 +350,8 @@ impl Worker {
             .version()
             .map(|version| version.to_string())
             .unwrap_or_else(|| release.tag_name.trim_start_matches('v').to_string());
-        let install = if release.macos_zip().is_none() {
+        let platform_asset = release.platform_asset();
+        let install = if platform_asset.is_none() {
             InstallKind::External
         } else {
             self.environment.kind
@@ -358,7 +359,7 @@ impl Worker {
         let asset = if install == InstallKind::Homebrew {
             release.macos_dmg().or_else(|| release.macos_zip())
         } else {
-            release.macos_zip()
+            platform_asset
         };
         let download_url = asset
             .map(|asset| asset.browser_download_url.clone())
@@ -370,8 +371,12 @@ impl Worker {
             .map(str::to_string);
         let detail = if install == InstallKind::External {
             self.environment.detail.clone().or_else(|| {
-                (release.macos_zip().is_none())
-                    .then(|| "This release has no macOS build attached.".to_string())
+                platform_asset.is_none().then(|| {
+                    format!(
+                        "This release has no {} build attached.",
+                        github::platform_name(github::current_platform())
+                    )
+                })
             })
         } else {
             None
@@ -440,9 +445,9 @@ impl Worker {
             .download_url
             .rsplit('/')
             .next()
-            .filter(|name| name.ends_with(".zip"))
+            .filter(|name| name.ends_with(".zip") || name.ends_with(".tar.gz"))
             .map(str::to_string)
-            .unwrap_or_else(|| format!("RustChamber-{}-macos-universal.zip", info.version));
+            .unwrap_or_else(|| default_archive_name(&info.version));
         let archive = dir.join(name);
         let verified = archive.is_file()
             && info.sha256.as_deref().is_some_and(|expected| {
@@ -677,6 +682,16 @@ impl Worker {
     fn publish(&self) {
         let _ = self.events.send(self.snapshot.clone());
         (self.wake)();
+    }
+}
+
+fn default_archive_name(version: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("RustChamber-{version}-macos-universal.zip")
+    } else if cfg!(target_os = "windows") {
+        format!("RustChamber-{version}-windows-x86_64.zip")
+    } else {
+        format!("RustChamber-{version}-linux-x86_64.tar.gz")
     }
 }
 

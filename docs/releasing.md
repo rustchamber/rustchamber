@@ -43,15 +43,17 @@ git tag -a v0.1.0-beta -m "RustChamber 0.1.0-beta"
 git push origin v0.1.0-beta
 ```
 
-GitHub Actions builds a universal macOS binary (arm64 + x86_64), creates
-`RustChamber.app`, signs it, and publishes:
+GitHub Actions builds a universal macOS binary (arm64 + x86_64) and a Linux x86_64
+tarball, then publishes:
 
 - `RustChamber-0.1.0-beta-macos-universal.dmg`
 - `RustChamber-0.1.0-beta-macos-universal.zip`
+- `RustChamber-0.1.0-beta-linux-x86_64.tar.gz`
 
 The DMG contains the app and an Applications shortcut. The ZIP is there for users who
-prefer it. Versions with a prerelease suffix, such as `0.1.0-beta`, are published as a
-GitHub prerelease automatically.
+prefer it. The Linux tarball contains the `rchamber` binary, a desktop entry, hicolor
+icons, AppStream metadata, and `install.sh`. Versions with a prerelease suffix, such as
+`0.1.0-beta`, are published as a GitHub prerelease automatically.
 
 Before tagging, bump the workspace version in `Cargo.toml` and add the matching section to
 `CHANGELOG.md`.
@@ -89,8 +91,19 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bash scripts/package-macos.sh
 ```
 
-The script needs `jq`. Artifacts are written to `dist/`. It uses an ad-hoc signature unless
-`CODESIGN_IDENTITY` is set.
+The macOS script needs `jq`. Artifacts are written to `dist/`. It uses an ad-hoc signature
+unless `CODESIGN_IDENTITY` is set.
+
+On Linux, the packaging script builds for the host by default:
+
+```bash
+bash scripts/package-linux.sh
+```
+
+It writes `dist/RustChamber-<version>-linux-<arch>.tar.gz`. The asset name follows `ARCH`,
+which defaults to the host architecture, or to `TARGET` when that is set. For a cross build,
+set `TARGET=aarch64-unknown-linux-gnu` and install that Rust target and linker. The script
+needs `jq`, `tar`, and the system libraries listed in the README.
 
 ## Signing and notarization
 
@@ -129,17 +142,50 @@ base64 -i DeveloperID.p12 | pbcopy
 
 Paste the result into the `APPLE_CERTIFICATE` secret.
 
-## Adding Linux and Windows
+## Linux packages
 
-The release workflow currently builds only macOS. To add the other targets, create jobs
-with the same structure:
+The release workflow has three jobs:
 
-- **Linux** — build on `ubuntu-24.04`, install `libxkbcommon-dev` and the xcb development
-  packages, then package the binary with the desktop entry, icon, and a `.tar.gz`.
-- **Windows** — build on `windows-2025` and package `rchamber.exe` with the icon and a ZIP.
+1. `macos` builds the universal app, signs and notarizes it when the Apple secrets exist,
+   and uploads the DMG and ZIP as workflow artifacts.
+2. `linux` builds and packages the tarball on `ubuntu-24.04`, then uploads it as a workflow
+   artifact. The job installs the X11, Wayland, OpenGL, fontconfig, and xkbcommon
+   development packages before building.
+3. `publish` runs after both succeed, creates the GitHub release as a draft, uploads every
+   artifact, and publishes it. Keeping the release creation in one job avoids two builds
+   racing to create the same tag.
 
-Keep the asset names parallel (`RustChamber-<version>-linux-x86_64.tar.gz`,
-`RustChamber-<version>-windows-x86_64.zip`) so the release page stays readable.
+The Linux tarball layout is:
+
+```
+RustChamber-<version>-linux-x86_64/
+├── rchamber
+├── install.sh
+├── README.md
+├── LICENSE
+├── NOTICE
+└── share/
+    ├── applications/dev.rustchamber.RustChamber.desktop
+    ├── icons/hicolor/{128x128,256x256,512x512}/apps/dev.rustchamber.RustChamber.png
+    └── metainfo/dev.rustchamber.RustChamber.metainfo.xml
+```
+
+`install.sh` installs under `$PREFIX` (default `$HOME/.local`) and rewrites the desktop
+entry's `Exec` line to the absolute binary path, so the application menu works without
+`~/.local/bin` being on the session `PATH`. Users can also extract the tarball and run
+`./rchamber` directly.
+
+The in-app updater treats a writable standalone binary as a native install. It downloads
+the tarball, unpacks it in the cache directory, runs the staged binary with `--version` to
+confirm the release, then swaps the executable after the app exits and relaunches it. An
+AppImage sets `APPIMAGE`, and a binary installed in a read-only directory, is reported as an
+external install: the update dialog opens the release page instead of attempting a write.
+
+Builds for other architectures use the same asset naming scheme
+(`RustChamber-<version>-linux-aarch64.tar.gz`) and need a matching `linux` matrix entry.
+
+Windows is still unsupported. Adding it means a `windows-2025` job that packages
+`rchamber.exe` with the icon and a ZIP, plus a `windows_zip` arm in the updater.
 
 ## Checklist
 
@@ -152,5 +198,7 @@ Keep the asset names parallel (`RustChamber-<version>-linux-x86_64.tar.gz`,
 - [ ] `git status` contains no `labs/`, `target/`, or `dist/`
 - [ ] Tag pushed
 - [ ] Release assets present and the DMG opens
+- [ ] `RustChamber-<version>-linux-x86_64.tar.gz` extracts, `./rchamber --version` matches,
+      and `./install.sh` adds a desktop entry
 - [ ] Homebrew cask updated by the `homebrew` job
 - [ ] `brew install --cask rustchamber/tap/rustchamber` opens without a Gatekeeper prompt

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.6-beta
+
+- Linux is now a published target: the release workflow builds a portable
+  `RustChamber-<version>-linux-x86_64.tar.gz` with the desktop entry, hicolor icons,
+  AppStream metadata, and an `install.sh` that installs to `~/.local` without sudo.
+- In-app updates work on Linux for standalone installs: the new executable is verified by
+  running `--version`, staged, and swapped in on restart. AppImage and system-directory
+  installs open the release page instead of trying to overwrite read-only files.
+- Update checks now select the asset for the running platform instead of always looking for
+  the macOS ZIP, and the release-feed fallback knows about Linux builds.
+- Project and file-manager labels follow the platform, and the project app menu no longer
+  lists macOS-only applications on Linux.
+- HEIC attachments fall back to ImageMagick, `heif-convert`, or `ffmpeg` when `sips` is not
+  available.
+- Newer OpenCode servers are detected through `/global/health` when `/api/info` is absent,
+  and the managed server receives both the legacy and current password variables.
+- The binary accepts `--version`/`-V` and prints the packaged version.
+
 ## 0.2.5-beta
 
 - A fresh install starts with no projects. Add a project by folder, clone a repository, or

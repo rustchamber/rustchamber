@@ -88,6 +88,8 @@ pub async fn launch(options: LaunchOptions) -> Result<ServerHandle, ApiError> {
         .arg("--port")
         .arg(port.to_string())
         .env("OPENCODE_PASSWORD", &password)
+        .env("OPENCODE_SERVER_PASSWORD", &password)
+        .env("OPENCODE_SERVER_USERNAME", "opencode")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

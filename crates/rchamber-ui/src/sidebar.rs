@@ -574,7 +574,13 @@ fn header(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                         ActionTint::Idle
                     },
                 );
-                if search.on_hover_text("Search sessions (⌘F)").clicked() {
+                if search
+                    .on_hover_text(format!(
+                        "Search sessions ({})",
+                        crate::widgets::shortcut_label("F")
+                    ))
+                    .clicked()
+                {
                     app.ui.search_open = !app.ui.search_open;
                     app.ui.session_search.clear();
                     app.model.search.clear();
@@ -819,8 +825,13 @@ fn more_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         ui.add_space(2.0);
         crate::widgets::hline(ui, p, 4.0);
         ui.add_space(2.0);
-        let response =
-            crate::widgets::menu_item(ui, "Settings", Some(Icon::Settings), Some("⌘,"), p);
+        let response = crate::widgets::menu_item(
+            ui,
+            "Settings",
+            Some(Icon::Settings),
+            Some(crate::widgets::shortcut_label(",").as_str()),
+            p,
+        );
         if response.clicked() {
             app.open_settings();
             state = false;
@@ -1545,8 +1556,13 @@ fn project_menu(
             app.ui.project_menu = None;
         }
         items.push(response);
-        let response =
-            crate::widgets::menu_item(ui, "Show in Finder", Some(Icon::FolderOpen), None, p);
+        let response = crate::widgets::menu_item(
+            ui,
+            crate::widgets::reveal_label(),
+            Some(Icon::FolderOpen),
+            None,
+            p,
+        );
         if response.clicked() {
             if let Err(error) =
                 crate::widgets::reveal_in_finder(std::path::Path::new(&project.canonical))
@@ -2966,15 +2982,25 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.add_space(FOOTER_PAD_X);
             let settings = footer_button(ui, p, Icon::Settings);
-            if settings.on_hover_text("Settings (⌘,)").clicked() {
+            if settings
+                .on_hover_text(format!(
+                    "Settings ({})",
+                    crate::widgets::shortcut_label(",")
+                ))
+                .clicked()
+            {
                 app.open_settings();
             }
             let help = footer_button(ui, p, Icon::Info);
             if help.on_hover_text("Keyboard shortcuts").clicked() {
-                app.model.toast(
-                    ToastKind::Info,
-                    "⌘K commands · ⌘N new session · ⌘F search · ⌘, settings",
+                let hint = format!(
+                    "{} commands · {} new session · {} search · {} settings",
+                    crate::widgets::shortcut_label("K"),
+                    crate::widgets::shortcut_label("N"),
+                    crate::widgets::shortcut_label("F"),
+                    crate::widgets::shortcut_label(",")
                 );
+                app.model.toast(ToastKind::Info, hint);
             }
             crate::update::sidebar_badge(ui, app, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

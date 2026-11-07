@@ -296,7 +296,20 @@ impl Client {
     }
 
     pub async fn info(&self) -> Result<ServerInfo, ApiError> {
-        self.get("/api/info").await
+        if let Ok(info) = self.get::<ServerInfo>("/api/info").await {
+            return Ok(info);
+        }
+        // Newer OpenCode servers no longer expose /api/info. Their health
+        // endpoint carries the version, which is all the UI needs.
+        let health: HealthInfo = self.get("/global/health").await?;
+        Ok(ServerInfo {
+            version: health.version,
+            pid: 0,
+            hostname: None,
+            urls: Vec::new(),
+            paths: Default::default(),
+            capabilities: None,
+        })
     }
 
     fn session_query(&self, limit: u32) -> Vec<(&'static str, String)> {
@@ -636,12 +649,23 @@ impl Client {
     }
 
     pub async fn mcp_servers(&self) -> Result<Vec<McpServer>, ApiError> {
-        let envelope: Data<Vec<McpServer>> = self.get("/api/mcp").await?;
-        Ok(envelope.data)
+        match self.get::<Data<Vec<McpServer>>>("/api/mcp").await {
+            Ok(envelope) => Ok(envelope.data),
+            // Newer servers no longer expose the MCP listing route and answer
+            // with the web UI page. Treat that as an empty list.
+            Err(error) if missing_route(&error) => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn projects(&self) -> Result<Vec<Project>, ApiError> {
-        self.get("/api/project").await
+        match self.get::<Vec<Project>>("/api/project").await {
+            Ok(projects) => Ok(projects),
+            // The route is absent on newer servers; the local project registry
+            // does not depend on it.
+            Err(error) if missing_route(&error) => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn vcs_info(&self) -> Result<VcsInfo, ApiError> {
@@ -831,6 +855,14 @@ fn decode_optional_body(body: &str) -> Result<Option<Value>, ApiError> {
         .map_err(|e| ApiError::Decode(format!("{e}: {}", truncate(body, 400))))
 }
 
+fn missing_route(error: &ApiError) -> bool {
+    match error {
+        ApiError::Status { status: 404, .. } => true,
+        ApiError::Decode(message) => message.contains("<!doctype html>"),
+        _ => false,
+    }
+}
+
 fn parse_error(status: u16, body: &str) -> ApiError {
     #[derive(Deserialize)]
     struct Tagged {
@@ -861,6 +893,12 @@ pub struct SessionList {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Data<T> {
     data: T,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct HealthInfo {
+    #[serde(default)]
+    version: String,
 }
 
 #[derive(Clone, Debug)]

@@ -50,6 +50,22 @@ quarantine flag:
 xattr -dr com.apple.quarantine /Applications/RustChamber.app
 ```
 
+### Linux
+
+Linux x86_64 builds are published on the same [Releases](https://github.com/rustchamber/rustchamber/releases)
+page as a tarball.
+
+1. Download `RustChamber-<version>-linux-x86_64.tar.gz`.
+2. Extract it and run `./install.sh`. It installs to `~/.local` and needs no sudo.
+   Running `./rchamber` from the extracted folder works too.
+3. Install the [OpenCode CLI](https://opencode.ai/docs) and make sure `opencode` is on your
+   `PATH`.
+
+The tarball includes the desktop entry, hicolor icons, and AppStream metadata, so the app
+appears in the application menu after installation. Set `PREFIX=/usr/local` to install
+somewhere else. The binary needs the X11/Wayland and OpenGL libraries listed under
+[Build from source](#build-from-source).
+
 ### Updates
 
 RustChamber checks the latest GitHub release a few seconds after launch and every hour
@@ -59,10 +75,13 @@ working, and offers **Restart to update** when the download finishes.
 
 The update path follows how RustChamber was installed. A Homebrew install runs
 `brew upgrade --cask rustchamber`; a DMG install replaces the app bundle in place and
-reopens the new version. If the app runs from a mounted disk image or a folder it cannot
-write to, the dialog links to the release instead.
+reopens the new version. On Linux, a standalone install downloads the new tarball, verifies
+the binary inside it, replaces the executable on restart, and reopens the app. If the app
+runs from a mounted disk image, an AppImage, or a folder it cannot write to, the dialog
+links to the release instead.
 
-Linux and Windows packages are not published yet. Both platforms build from source.
+Windows packages are not published yet. Windows builds from source; they check for updates
+but open the release page instead of installing.
 
 ## Build from source
 
@@ -77,8 +96,27 @@ cargo run -p rchamber --release
 On Debian or Ubuntu:
 
 ```bash
-sudo apt install libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+sudo apt install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev \
+  libfontconfig1-dev libwayland-dev
 ```
+
+On Fedora:
+
+```bash
+sudo dnf install gcc gcc-c++ make pkgconf-pkg-config libxkbcommon-devel \
+  libxkbcommon-x11-devel libxcb-devel mesa-libGL-devel fontconfig-devel \
+  wayland-devel
+```
+
+On Arch Linux:
+
+```bash
+sudo pacman -S base-devel pkgconf libxkbcommon libxcb mesa fontconfig wayland
+```
+
+HEIC attachments use `sips` on macOS and fall back to ImageMagick, `heif-convert`, or
+`ffmpeg` on Linux.
 
 To build the macOS app bundle and disk image locally:
 
@@ -87,6 +125,14 @@ bash scripts/package-macos.sh
 ```
 
 This needs `jq` and both Apple targets. The output lands in `dist/`.
+
+To build the Linux tarball locally:
+
+```bash
+bash scripts/package-linux.sh
+```
+
+The output is `dist/RustChamber-<version>-linux-<arch>.tar.gz`.
 
 ## What it does
 
@@ -224,8 +270,8 @@ drawn.
 
 ## Status
 
-macOS is the tested target. Linux and Windows compile in CI and are expected to work, but
-they have not received the same hands-on testing.
+macOS and Linux are the tested targets. Windows compiles in CI and is expected to work,
+but it has not received the same hands-on testing.
 
 Known limits:
 
@@ -233,7 +279,7 @@ Known limits:
 - Providers, agents, commands, and skills are shown read-only, as reported by OpenCode.
 - AI session renaming, Mini Chat, and worktree moves are visible in menus but disabled
   until their backends exist.
-- Linux and Windows builds check for updates but open the release page instead of installing.
+- Windows builds check for updates but open the release page instead of installing.
 - An OpenCode CLI must be installed; the app does not bundle it.
 
 ## License

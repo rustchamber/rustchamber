@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=RustChamber
+GenericName=OpenCode Workspace
+Comment=Native desktop workspace for OpenCode
+Exec=rchamber %U
+Icon=dev.rustchamber.RustChamber
+Terminal=false
+Categories=Development;IDE;
+Keywords=opencode;ai;agent;terminal;git;editor;
+StartupNotify=true
+StartupWMClass=dev.rustchamber.RustChamber
