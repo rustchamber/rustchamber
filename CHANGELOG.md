@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.7-beta
+## 0.2.7
 
 - Added a Flatpak manifest for Flathub. The sandbox runs the host `opencode`,
   `git`, shell, and file opener through `flatpak-spawn`, so projects, credentials,

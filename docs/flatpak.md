@@ -52,14 +52,16 @@ flatpak-builder --user --install --force-clean \
 flatpak run dev.rustchamber.RustChamber
 ```
 
-If `flatpak-builder` is not available on the host, the `org.flatpak.Builder` app also
-provides it:
+The recommended Flathub tool is the `org.flatpak.Builder` app, which provides
+`flathub-build` and the linter:
 
 ```bash
 flatpak install flathub org.flatpak.Builder
-flatpak run --command=flatpak-builder org.flatpak.Builder \
-  --user --install --force-clean --disable-rofiles-fuse \
-  build-flatpak packaging/flatpak/dev.rustchamber.RustChamber.local.yml
+
+flatpak run --command=flathub-build org.flatpak.Builder --install \
+  packaging/flatpak/dev.rustchamber.RustChamber.local.yml
+
+flatpak run dev.rustchamber.RustChamber
 ```
 
 ## Host tools
@@ -105,23 +107,26 @@ Flatpak and Flathub own updates. The app detects `FLATPAK_ID` and:
    ```yaml
    - type: git
      url: https://github.com/rustchamber/rustchamber.git
-     tag: v0.2.7-beta
+     tag: v0.2.7
      commit: <full-commit-sha>
    ```
 
 3. Validate locally:
 
    ```bash
-   flatpak-builder --user --install --force-clean \
-     --disable-rofiles-fuse build-flatpak \
+   flatpak run --command=flathub-build org.flatpak.Builder --install \
      packaging/flatpak/dev.rustchamber.RustChamber.yml
-   flatpak-builder-lint packaging/flatpak/dev.rustchamber.RustChamber.yml
+
+   flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+     manifest packaging/flatpak/dev.rustchamber.RustChamber.yml
+
    appstreamcli validate packaging/linux/dev.rustchamber.RustChamber.metainfo.xml
    desktop-file-validate packaging/linux/dev.rustchamber.RustChamber.desktop
    ```
 
-4. Fork [flathub/flathub](https://github.com/flathub/flathub), add the manifest following
-   the repository's new-app submission template, and open a pull request. The app ID is
+4. Fork [flathub/flathub](https://github.com/flathub/flathub), clone the fork on the
+   `new-pr` branch, add the manifest following the repository's new-app submission
+   template, and open a pull request against `new-pr` (not `master`). The app ID is
    `dev.rustchamber.RustChamber`; the domain `rustchamber.dev` is owned by the project, so
    complete the verification requested in the review.
 

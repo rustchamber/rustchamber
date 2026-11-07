@@ -58,7 +58,7 @@ jobs:
             build-flatpak \
             packaging/flatpak/dev.rustchamber.RustChamber.local.yml
           flatpak build-bundle repo \
-            dist/RustChamber-0.2.7-beta-x86_64.flatpak \
+            dist/RustChamber-0.2.7-x86_64.flatpak \
             dev.rustchamber.RustChamber
 
       - uses: actions/upload-artifact@v4

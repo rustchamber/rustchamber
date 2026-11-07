@@ -29,13 +29,15 @@ modules:
       env:
         CARGO_HOME: /run/build/rustchamber/cargo
         CARGO_NET_OFFLINE: 'true'
-        RCHAMBER_VERSION: 0.2.7-beta
+        RCHAMBER_VERSION: 0.2.7
     build-commands:
       - cargo build --release --locked --offline
       - install -Dm755 target/release/rchamber /app/bin/rchamber
       - install -Dm644 packaging/linux/dev.rustchamber.RustChamber.desktop /app/share/applications/dev.rustchamber.RustChamber.desktop
       - install -Dm644 packaging/linux/dev.rustchamber.RustChamber.metainfo.xml /app/share/metainfo/dev.rustchamber.RustChamber.metainfo.xml
       - for size in 128 256 512; do install -Dm644 "packaging/linux/icons/hicolor/${size}x${size}/apps/dev.rustchamber.RustChamber.png" "/app/share/icons/hicolor/${size}x${size}/apps/dev.rustchamber.RustChamber.png"; done
+      - install -Dm644 LICENSE /app/share/licenses/dev.rustchamber.RustChamber/LICENSE
+      - install -Dm644 NOTICE /app/share/licenses/dev.rustchamber.RustChamber/NOTICE
       - install -Dm644 LICENSE /app/share/doc/rustchamber/LICENSE
       - install -Dm644 NOTICE /app/share/doc/rustchamber/NOTICE
       - install -Dm644 README.md /app/share/doc/rustchamber/README.md

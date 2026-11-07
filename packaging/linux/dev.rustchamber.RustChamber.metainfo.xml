@@ -20,6 +20,11 @@
       <li>Project tree, editor, session diffs, and native git operations</li>
       <li>Managed OpenCode server lifecycle or an existing remote endpoint</li>
     </ul>
+    <p>
+      Requires the OpenCode CLI and git on the host. The Flatpak runs those tools through
+      the Flatpak spawn portal so the user's credentials, shell, and repositories remain
+      available.
+    </p>
   </description>
   <launchable type="desktop-id">dev.rustchamber.RustChamber.desktop</launchable>
   <url type="homepage">https://rustchamber.lipecode.com</url>
@@ -54,7 +59,7 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="0.2.7-beta" date="2026-11-07">
+    <release version="0.2.7" date="2026-11-07">
       <description>
         <p>Portable Linux packages, Flatpak support, and desktop theme detection.</p>
       </description>

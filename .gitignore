@@ -1,5 +1,6 @@
 /target
 /target-bullseye
+/.flatpak-builder
 /build-flatpak
 /repo
 /labs

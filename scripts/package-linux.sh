@@ -115,7 +115,7 @@ if [[ "$PACKAGES" != 0 && "$PACKAGES" != false ]]; then
     arch_rendered="dist/nfpm-arch.yaml"
     render_nfpm "$VERSION" "$rendered"
     # Arch pkgver cannot contain a hyphen. Keep the prerelease suffix instead
-    # of letting nfpm silently turn 0.2.7-beta into 0.2.7.
+    # of letting nfpm silently drop a prerelease suffix.
     render_nfpm "${VERSION//-/}" "$arch_rendered" none
 
     for packager in deb rpm archlinux; do
