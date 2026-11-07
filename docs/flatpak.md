@@ -120,10 +120,10 @@ Flatpak and Flathub own updates. The app detects `FLATPAK_ID` and:
    desktop-file-validate packaging/linux/dev.rustchamber.RustChamber.desktop
    ```
 
-4. Fork [flathub/flathub](https://github.com/flathub/flathub), add the app ID directory
-   and manifest following the repository's submission template, and open a pull request.
-   The app ID is `dev.rustchamber.RustChamber`; the domain `rustchamber.dev` is owned by
-   the project, so complete the verification requested in the review.
+4. Fork [flathub/flathub](https://github.com/flathub/flathub), add the manifest following
+   the repository's new-app submission template, and open a pull request. The app ID is
+   `dev.rustchamber.RustChamber`; the domain `rustchamber.dev` is owned by the project, so
+   complete the verification requested in the review.
 
 5. In the pull request, explain the permissions:
 
