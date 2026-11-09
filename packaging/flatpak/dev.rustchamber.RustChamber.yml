@@ -29,7 +29,7 @@ modules:
       env:
         CARGO_HOME: /run/build/rustchamber/cargo
         CARGO_NET_OFFLINE: 'true'
-        RCHAMBER_VERSION: 0.2.9
+        RCHAMBER_VERSION: 0.2.10
     build-commands:
       - cargo build --release --locked --offline
       - install -Dm755 target/release/rchamber /app/bin/rchamber

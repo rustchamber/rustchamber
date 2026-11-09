@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.10 - 2026-11-09
+
+- Messages refresh again after a session moves between directories: the wrapped `previous`
+  location sent by OpenCode 2 in `location-switched` messages no longer fails decoding.
+- Extension panels open at the width their content needs, never below the 320-point minimum,
+  keep a width dragged per extension, and reflow widget rows instead of clipping them.
+
 ## 0.2.9 - 2026-11-09
 
 - Native extensions: a folder with `rchamber.json` and Lua adds panels, status sections,

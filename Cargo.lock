@@ -3951,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "eframe",
@@ -3965,7 +3965,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-api"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3983,7 +3983,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-app"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4005,7 +4005,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-ext"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "directories",
  "mlua",
@@ -4023,7 +4023,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-git"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4031,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-term"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "egui",
  "portable-pty",
@@ -4041,7 +4041,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-ui"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "arboard",
  "ashpd",
@@ -4076,7 +4076,7 @@ dependencies = [
 
 [[package]]
 name = "rchamber-update"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "chrono",
  "directories",
