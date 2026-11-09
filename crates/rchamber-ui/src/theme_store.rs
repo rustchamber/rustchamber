@@ -13,6 +13,8 @@ pub const CODE_SIZE_MIN: f32 = 9.0;
 pub const CODE_SIZE_MAX: f32 = 22.0;
 pub const TERMINAL_SIZE_MIN: f32 = 9.0;
 pub const TERMINAL_SIZE_MAX: f32 = 24.0;
+pub const CHAT_SCALE_MIN: f32 = 0.8;
+pub const CHAT_SCALE_MAX: f32 = 1.4;
 pub const DEFAULT_CODE_SIZE: f32 = 13.0;
 pub const DEFAULT_TERMINAL_SIZE: f32 = 14.0;
 
@@ -46,6 +48,7 @@ pub struct ThemeSettings {
     pub code_font: String,
     pub code_size: f32,
     pub terminal_size: f32,
+    pub chat_scale: f32,
     pub spacing_scale: f32,
     pub animated: bool,
     pub language: String,
@@ -65,6 +68,7 @@ impl Default for ThemeSettings {
             code_font: "jetbrains-mono".into(),
             code_size: DEFAULT_CODE_SIZE,
             terminal_size: DEFAULT_TERMINAL_SIZE,
+            chat_scale: 1.0,
             spacing_scale: 1.0,
             animated: true,
             language: "en".into(),
@@ -123,6 +127,7 @@ impl ThemeSettings {
         self.terminal_size = self
             .terminal_size
             .clamp(TERMINAL_SIZE_MIN, TERMINAL_SIZE_MAX);
+        self.chat_scale = self.chat_scale.clamp(CHAT_SCALE_MIN, CHAT_SCALE_MAX);
         if theme_palette(&self.dark_theme, true).is_none() {
             self.dark_theme = ThemeSettings::default().dark_theme;
         }
@@ -350,6 +355,8 @@ const THEME_SOURCES: &[&str] = &[
     include_str!("../assets/themes/nord-light.json"),
     include_str!("../assets/themes/onedarkpro-dark.json"),
     include_str!("../assets/themes/onedarkpro-light.json"),
+    include_str!("../assets/themes/patina-dark.json"),
+    include_str!("../assets/themes/patina-light.json"),
     include_str!("../assets/themes/rustchamber-dark.json"),
     include_str!("../assets/themes/rustchamber-light.json"),
     include_str!("../assets/themes/opencode-dark.json"),

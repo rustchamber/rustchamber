@@ -102,6 +102,50 @@ pub enum Action {
         password: Option<String>,
         workspace: Option<String>,
     },
+    InstallExtension {
+        path: String,
+    },
+    InstallExtensionUrl {
+        url: String,
+    },
+    ApproveExtension {
+        id: String,
+        grants: Vec<String>,
+    },
+    SetExtensionEnabled {
+        id: String,
+        enabled: bool,
+    },
+    RemoveExtension(String),
+    ReloadExtension(String),
+    ExtensionCall {
+        id: String,
+        call_id: String,
+        method: String,
+        args: Vec<Value>,
+    },
+    ExtensionMentions {
+        query: String,
+    },
+    ExtensionBlock {
+        name: String,
+        args: Vec<String>,
+    },
+    ExtensionCommand {
+        id: String,
+        name: String,
+        args: String,
+    },
+    ExtensionAction {
+        id: String,
+        action: String,
+        item: Value,
+    },
+    ExtensionStatusRefresh,
+    SetExtensionAppearance {
+        theme: String,
+        locale: String,
+    },
     Reconnect,
     Shutdown,
 }
@@ -174,6 +218,47 @@ pub enum BackendEvent {
         items: Vec<serde_json::Value>,
     },
     WorkspaceChanged(String),
+    Extensions(Vec<rchamber_ext::InstalledExtension>),
+    ExtensionInstalled {
+        extension_id: String,
+    },
+    ExtensionResult {
+        call_id: String,
+        extension_id: String,
+        method: String,
+        value: serde_json::Value,
+    },
+    ExtensionBlock {
+        key: String,
+        widgets: Vec<rchamber_ext::Widget>,
+    },
+    ExtensionMentions {
+        extension_id: String,
+        rows: Vec<crate::extensions::MentionRow>,
+    },
+    ExtensionError {
+        call_id: String,
+        extension_id: String,
+        method: String,
+        message: String,
+    },
+    ExtensionCompose {
+        text: String,
+        send: bool,
+    },
+    ExtensionAttach {
+        provider_id: String,
+        id: String,
+        title: String,
+        url: Option<String>,
+    },
+    ExtensionBadge {
+        id: String,
+        count: Option<i64>,
+    },
+    ExtensionOpenSession(String),
+    ExtensionClipboard(String),
+    ExtensionOpenUrl(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

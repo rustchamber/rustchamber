@@ -44,6 +44,42 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                 }
                 ui.add_space(RAIL_GAP);
             }
+            let extensions: Vec<(String, String, String, Icon, i64)> = app
+                .model
+                .extensions
+                .installed
+                .iter()
+                .filter(|extension| extension.is_active())
+                .filter_map(|extension| {
+                    let panel = extension.manifest.contributes.panel.as_ref()?;
+                    Some((
+                        extension.manifest.id.clone(),
+                        panel
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| extension.manifest.name.clone()),
+                        extension.manifest.name.clone(),
+                        icons::extension_icon(extension.manifest.icon.as_deref()),
+                        app.model
+                            .extensions
+                            .badges
+                            .get(&extension.manifest.id)
+                            .copied()
+                            .unwrap_or(0),
+                    ))
+                })
+                .collect();
+            for (id, title, name, icon, badge) in extensions {
+                let active = app.ui.surface == crate::surfaces::Surface::Extension
+                    && app.ui.extension_panel.as_deref() == Some(id.as_str())
+                    && app.ui.context_open;
+                let response = rail_button(ui, &p, icon, active, badge > 0)
+                    .on_hover_text(format!("{title}\n{name}"));
+                if response.clicked() {
+                    activate_extension(app, &id);
+                }
+                ui.add_space(RAIL_GAP);
+            }
             let configure = panel_config::configure_button(ui, &p);
             if configure.on_hover_text("Configure panels").clicked() {
                 panel_config::open_dialog(ui.ctx());
@@ -181,6 +217,25 @@ fn activate(app: &mut RustChamber, panel: RailPanel) {
     {
         app.backend.send(Action::LoadDiff(id));
     }
+}
+
+fn activate_extension(app: &mut RustChamber, id: &str) {
+    if app.ui.surface == crate::surfaces::Surface::Extension
+        && app.ui.extension_panel.as_deref() == Some(id)
+        && app.ui.context_open
+    {
+        app.ui.context_open = false;
+        return;
+    }
+    app.ui.surface = crate::surfaces::Surface::Extension;
+    app.ui.extension_panel = Some(id.to_string());
+    app.ui.context_open = true;
+    app.backend.send(Action::ExtensionCall {
+        id: id.to_string(),
+        call_id: "panel".into(),
+        method: "panel".into(),
+        args: Vec::new(),
+    });
 }
 
 fn rail_button(ui: &mut Ui, p: &Palette, icon: Icon, active: bool, badge: bool) -> egui::Response {

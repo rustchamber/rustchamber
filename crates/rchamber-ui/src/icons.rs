@@ -69,6 +69,7 @@ pub enum Icon {
     CalendarClock,
     ChartBar,
     Store,
+    Puzzle,
     CheckCheck,
     ChevronUp,
 }
@@ -139,6 +140,7 @@ impl Icon {
             Icon::CalendarClock => "bytes://rust-ui/calendar-clock.svg",
             Icon::ChartBar => "bytes://rust-ui/chart-bar.svg",
             Icon::Store => "bytes://rust-ui/store.svg",
+            Icon::Puzzle => "bytes://rust-ui/puzzle.svg",
             Icon::CheckCheck => "bytes://rust-ui/check-check.svg",
             Icon::ChevronUp => "bytes://rust-ui/chevron-up.svg",
         }
@@ -209,10 +211,15 @@ impl Icon {
             Icon::CalendarClock => data::CALENDARCLOCK,
             Icon::ChartBar => data::CHARTBAR,
             Icon::Store => data::STORE,
+            Icon::Puzzle => data::PUZZLE,
             Icon::CheckCheck => data::CHECKCHECK,
             Icon::ChevronUp => data::CHEVRONUP,
         }
     }
+}
+
+pub fn extension_icon(_name: Option<&str>) -> Icon {
+    Icon::Puzzle
 }
 
 pub fn icon(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {

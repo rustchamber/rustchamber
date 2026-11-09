@@ -371,6 +371,11 @@ pub struct UiState {
     pub move_folder_name: String,
     pub show_all_folders: HashSet<String>,
     pub add_project: crate::add_project::State,
+    pub extension_panel: Option<String>,
+    pub pending_extension_install: Option<rchamber_ext::InstallLink>,
+    pub extension_path: String,
+    pub extension_approval: Option<String>,
+    pub extension_remove: Option<String>,
 }
 
 pub struct RustChamber {
@@ -390,6 +395,8 @@ pub struct RustChamber {
     screenshot_taken: bool,
     last_draft_save: f64,
     auto_open: bool,
+    extension_theme: String,
+    extension_locale: String,
 }
 
 impl RustChamber {
@@ -463,8 +470,12 @@ impl RustChamber {
                 "changes" => Surface::Changes,
                 "terminal" => Surface::Terminal,
                 "context" => Surface::Context,
+                "extension" => Surface::Extension,
                 _ => Surface::Session,
             };
+            if let Ok(panel) = std::env::var("RCHAMBER_EXTENSION_PANEL") {
+                ui.extension_panel = Some(panel);
+            }
             ui.context_open = true;
         }
         if std::env::var("RCHAMBER_OPEN_PALETTE").is_ok() {
@@ -499,6 +510,14 @@ impl RustChamber {
             .unwrap_or_default();
         ui.home_project = Some(initial_target);
         ui.home_allow_all = false;
+        if let Ok(draft) = std::env::var("RCHAMBER_DRAFT") {
+            ui.home_draft = draft;
+            model.composer_focus = true;
+        }
+        if std::env::var("RCHAMBER_FOCUS_COMPOSER").is_ok() {
+            cc.egui_ctx
+                .data_mut(|data| data.insert_temp(Id::unique("focus-composer-once"), true));
+        }
         if std::env::var("RCHAMBER_OPEN_SEARCH").is_ok() {
             ui.search_open = true;
             ui.focus_search = true;
@@ -553,6 +572,8 @@ impl RustChamber {
             screenshot_taken: false,
             last_draft_save: 0.0,
             auto_open: false,
+            extension_theme: String::new(),
+            extension_locale: String::new(),
         }
     }
 
@@ -864,6 +885,146 @@ impl RustChamber {
         self.ui.sidebar_folded_by_zone = false;
     }
 
+    pub fn begin_new_extension(&mut self) {
+        if let Some(chat) = &mut self.model.active {
+            chat.draft = "/new-extension ".into();
+        } else {
+            self.ui.home_draft = "/new-extension ".into();
+        }
+        self.model.composer_focus = true;
+    }
+
+    fn handle_deep_links(&mut self, ctx: &egui::Context) {
+        let link =
+            ctx.data_mut(|data| data.remove_temp::<String>(Id::unique("rchamber-deep-link")));
+        let Some(link) = link else {
+            return;
+        };
+        if let Some(install) = rchamber_ext::parse_install_link(&link) {
+            self.ui.pending_extension_install = Some(install);
+            return;
+        }
+        if let Some(id) = rchamber_ext::parse_session_link(&link) {
+            self.open_session(id);
+            return;
+        }
+        self.model
+            .toast(ToastKind::Warning, format!("Unknown link: {link}"));
+    }
+
+    fn consume_extension_events(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.model.pending_open_session.take() {
+            self.open_session(id);
+        }
+        if let Some(url) = self.model.pending_open_url.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+        if let Some(text) = self.model.pending_clipboard.take() {
+            ctx.copy_text(text);
+        }
+        if let Some(id) = self.model.pending_extension_approval.take() {
+            self.ui.show_settings = true;
+            crate::settings::open_page(ctx, 5);
+            self.ui.extension_approval = Some(id);
+        }
+        if let Some(id) = self.model.pending_extension_panel.take() {
+            self.ui.surface = crate::surfaces::Surface::Extension;
+            self.ui.extension_panel = Some(id);
+            self.ui.context_open = true;
+        }
+        let queued =
+            ctx.data_mut(|data| data.remove_temp::<String>(Id::unique("rchamber-compose")));
+        if let Some(text) = queued.or_else(|| self.model.pending_compose.take()) {
+            if let Some(chat) = &mut self.model.active {
+                if !chat.draft.is_empty() {
+                    chat.draft.push('\n');
+                }
+                chat.draft.push_str(&text);
+            } else {
+                if !self.ui.home_draft.is_empty() {
+                    self.ui.home_draft.push('\n');
+                }
+                self.ui.home_draft.push_str(&text);
+            }
+            self.model.composer_focus = true;
+        }
+    }
+
+    fn extension_install_dialog(&mut self, ctx: &egui::Context) {
+        let Some(install) = self.ui.pending_extension_install.clone() else {
+            return;
+        };
+        let p = self.palette.clone();
+        let mut close = false;
+        let mut confirm = false;
+        let frame = egui::Frame::new()
+            .fill(p.bg)
+            .corner_radius(theme::radius::XL)
+            .inner_margin(Margin::same(20));
+        let modal = egui::Modal::new(Id::unique("extension-install-modal"))
+            .frame(frame)
+            .show(ctx, |ui| {
+                ui.set_width(460.0);
+                ui.label(
+                    RichText::new("Add this extension?")
+                        .font(theme::font_semibold(15.0))
+                        .color(p.fg),
+                );
+                ui.add_space(8.0);
+                let source = install.source();
+                ui.label(
+                    RichText::new(source)
+                        .font(theme::font_mono(12.0))
+                        .color(p.fg_muted),
+                );
+                ui.add_space(10.0);
+                let explanation = match &install {
+                    rchamber_ext::InstallLink::Path(_) => {
+                        "RustChamber will read this folder and run its Lua in a sandbox. Nothing is copied. You will review the permissions before it turns on."
+                    }
+                    rchamber_ext::InstallLink::Url(_) => {
+                        "RustChamber will download the archive, validate it and ask you to review its permissions. Only https links are accepted."
+                    }
+                };
+                ui.label(
+                    RichText::new(explanation)
+                        .font(theme::font(theme::TEXT_UI_LABEL))
+                        .color(p.fg_muted),
+                );
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    if widgets::primary_button(ui, "Add extension", Some(Icon::Download), &p).clicked() {
+                        confirm = true;
+                    }
+                    if widgets::ghost_button(ui, "Cancel", None, &p).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if modal.should_close() {
+            close = true;
+        }
+        if confirm {
+            match &install {
+                rchamber_ext::InstallLink::Path(path) => {
+                    self.backend.send(Action::InstallExtension {
+                        path: path.to_string_lossy().to_string(),
+                    });
+                }
+                rchamber_ext::InstallLink::Url(url) => {
+                    self.backend
+                        .send(Action::InstallExtensionUrl { url: url.clone() });
+                }
+            }
+            self.ui.show_settings = true;
+            settings::open_page(ctx, 5);
+            close = true;
+        }
+        if close {
+            self.ui.pending_extension_install = None;
+        }
+    }
+
     fn keyboard(&mut self, ctx: &egui::Context) {
         if !ctx.input(|input| input.focused) {
             self.ui.header_menu = false;
@@ -878,17 +1039,18 @@ impl RustChamber {
         if self.ui.surface == Surface::Terminal && surfaces::terminal::has_focus(ctx) {
             return;
         }
-        let command = ctx.input(|input| input.modifiers.command);
-        if ctx.input(|input| {
-            input.key_pressed(egui::Key::K) && (input.modifiers.command || input.modifiers.ctrl)
-        }) || ctx.input(|input| {
-            input.key_pressed(egui::Key::P) && (input.modifiers.command || input.modifiers.ctrl)
-        }) {
+        let keymap = crate::keybindings::Keymap::from_settings(&self.settings.keybindings);
+        use crate::keybindings::Command;
+        if keymap.matches(ctx, Command::Palette)
+            || ctx.input(|input| {
+                input.key_pressed(egui::Key::P) && (input.modifiers.command || input.modifiers.ctrl)
+            })
+        {
             self.ui.palette_open = !self.ui.palette_open;
             self.ui.palette_query.clear();
             self.ui.palette_index = 0;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::B) && input.modifiers.command) {
+        if keymap.matches(ctx, Command::ToggleSidebar) {
             self.toggle_sidebar();
             if self.ui.sidebar_collapsed {
                 self.ui.search_open = false;
@@ -896,38 +1058,28 @@ impl RustChamber {
                 self.model.search.clear();
             }
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::J) && input.modifiers.command) {
+        if keymap.matches(ctx, Command::Terminal) {
             self.ui.surface = Surface::Terminal;
             self.ui.context_open = true;
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::F) && input.modifiers.command) {
+        if keymap.matches(ctx, Command::Search) {
             self.ui.sidebar_collapsed = false;
             self.ui.search_open = true;
             self.ui.focus_search = true;
         }
-        if ctx.input(|input| {
-            input.key_pressed(egui::Key::M) && input.modifiers.command && input.modifiers.shift
-        }) {
+        if keymap.matches(ctx, Command::ModelMenu) {
             self.ui.model_menu = true;
         }
-        if ctx.input(|input| {
-            input.key_pressed(egui::Key::ArrowLeft)
-                && input.modifiers.command
-                && input.modifiers.alt
-        }) {
+        if keymap.matches(ctx, Command::PreviousSession) {
             self.cycle_session(-1);
         }
-        if ctx.input(|input| {
-            input.key_pressed(egui::Key::ArrowRight)
-                && input.modifiers.command
-                && input.modifiers.alt
-        }) {
+        if keymap.matches(ctx, Command::NextSession) {
             self.cycle_session(1);
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::N) && (command || input.modifiers.ctrl)) {
+        if keymap.matches(ctx, Command::NewSession) {
             self.begin_new_session(None);
         }
-        if ctx.input(|input| input.key_pressed(egui::Key::Comma) && command) {
+        if keymap.matches(ctx, Command::Settings) {
             self.open_settings();
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1322,6 +1474,12 @@ impl eframe::App for RustChamber {
     fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         self.poll_events();
+        self.handle_deep_links(&ctx);
+        self.consume_extension_events(&ctx);
+        crate::blocks::set_host(&ctx, crate::blocks::BlockHost::none());
+        if let Some(workspace) = self.model.workspace.clone() {
+            ctx.data_mut(|data| data.insert_temp(Id::unique("shell-cwd"), workspace));
+        }
         self.model.tick();
 
         if (self.settings.ui_scale - self.legacy_scale).abs() > 0.0001 {
@@ -1357,6 +1515,21 @@ impl eframe::App for RustChamber {
             }
         }
 
+        let extension_theme = if self.settings.appearance.is_dark() {
+            "dark"
+        } else {
+            "light"
+        };
+        if self.extension_theme != extension_theme
+            || self.extension_locale != self.settings.appearance.language
+        {
+            self.extension_theme = extension_theme.to_string();
+            self.extension_locale = self.settings.appearance.language.clone();
+            self.backend.send(Action::SetExtensionAppearance {
+                theme: self.extension_theme.clone(),
+                locale: self.extension_locale.clone(),
+            });
+        }
         self.keyboard(&ctx);
         if !self.ui.context_open {
             self.ui.expanded = false;
@@ -1556,6 +1729,7 @@ impl eframe::App for RustChamber {
                             Surface::Git => surfaces::git::show(ui, self),
                             Surface::Files => surfaces::files::show(ui, self),
                             Surface::Terminal => surfaces::terminal::show(ui, self),
+                            Surface::Extension => crate::extension_panel::show(ui, self),
                         }
                     }
                     ui.painter().rect_stroke(
@@ -1598,6 +1772,7 @@ impl eframe::App for RustChamber {
                                     Surface::Git => surfaces::git::show(ui, self),
                                     Surface::Files => surfaces::files::show(ui, self),
                                     Surface::Terminal => surfaces::terminal::show(ui, self),
+                                    Surface::Extension => crate::extension_panel::show(ui, self),
                                 }
                             }
                             ui.painter().rect_stroke(
@@ -1762,6 +1937,7 @@ impl eframe::App for RustChamber {
 
         crate::chrome::titlebar_controls(&ctx, self, &p);
 
+        self.extension_install_dialog(&ctx);
         if self.ui.show_settings {
             settings::show(&ctx, self);
         }

@@ -1,6 +1,7 @@
 pub mod action;
 pub mod attachments;
 pub mod backend;
+pub mod extensions;
 pub mod format;
 pub mod live;
 pub mod snippets;
@@ -11,7 +12,7 @@ pub use action::{
     Action, BackendEvent, Connection, ExecutionState, LaunchConfig, LiveEvent, ToastKind,
     TrackedProject,
 };
-pub use backend::{Backend, Wake};
+pub use backend::{ActionSink, Backend, Wake};
 pub use state::{AppModel, Chat, Startup, Toast, now_ms};
 pub use workspace::{
     DisplayPrefs, ProjectEntry, ProjectSort, SessionGrouping, WORKSPACE_VERSION, WorkspaceStore,

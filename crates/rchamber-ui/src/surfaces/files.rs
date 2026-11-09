@@ -15,7 +15,7 @@ use rchamber_app::{Action, Backend, Connection, ToastKind};
 use crate::app::RustChamber;
 use crate::icons::{self, Icon};
 use crate::markdown::Markdown;
-use crate::surfaces::{self, PanelTab};
+use crate::surfaces::{self, PanelTab, viewers};
 use crate::theme::{self, Palette};
 use crate::widgets;
 
@@ -794,6 +794,16 @@ fn viewer(
         return;
     };
 
+    if extension_file_view(ui, app, &active, p) {
+        return;
+    }
+
+    let local_file = local_path(&location, &active);
+    if viewers::supported(&active) && local_file.is_file() {
+        viewers::show(ui, p, &active, &local_file);
+        return;
+    }
+
     let loaded = app
         .model
         .files
@@ -857,6 +867,18 @@ fn viewer(
 
     let toolbar = toolbar(ui, p, ctx, &location, &active, buffer, preview, ready);
     let mut reload = toolbar.reload;
+    if toolbar.export {
+        let file = local_path(&location, &active);
+        match viewers::export_csv(&file) {
+            Ok(target) => app
+                .model
+                .toast(ToastKind::Success, format!("Exported {}", target.display())),
+            Err(error) => app.model.toast(
+                ToastKind::Error,
+                format!("Could not export {}: {error}", file_name(&active)),
+            ),
+        }
+    }
     let save = toolbar.save || save_shortcut;
     if toolbar.revert {
         buffer.revert();
@@ -1214,6 +1236,79 @@ fn loading_file(
     });
 }
 
+fn extension_file_view(ui: &mut Ui, app: &mut RustChamber, path: &str, p: &Palette) -> bool {
+    let matching: Option<(String, String)> = app
+        .model
+        .extensions
+        .installed
+        .iter()
+        .filter(|extension| extension.is_active())
+        .flat_map(|extension| {
+            let id = extension.manifest.id.clone();
+            extension
+                .manifest
+                .contributes
+                .file_editors
+                .iter()
+                .filter(|editor| rchamber_ext::manifest::patterns_match(&editor.matcher, path))
+                .map(move |editor| {
+                    (
+                        id.clone(),
+                        editor.method.clone().unwrap_or_else(|| "view".into()),
+                    )
+                })
+        })
+        .next();
+    let Some((id, method)) = matching else {
+        return false;
+    };
+    let key = format!("file:{path}");
+    if let Some(widgets) = app.model.extensions.blocks.get(&key).cloned() {
+        let palette = app.palette.clone();
+        let host = crate::extension_panel::host_for(app, &id);
+        crate::blocks::set_host(ui.ctx(), host);
+        ScrollArea::vertical()
+            .id_salt(("extension-file-view", path))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                crate::blocks::show_widgets(ui, &widgets, &palette, theme::TEXT_MARKDOWN);
+            });
+        return true;
+    }
+    let requested_id = Id::unique(("extension-file-requested", path));
+    let requested = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(requested_id).unwrap_or(false));
+    if !requested {
+        app.backend.send(Action::ExtensionCall {
+            id: id.clone(),
+            call_id: key,
+            method,
+            args: vec![serde_json::Value::String(path.to_string())],
+        });
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(requested_id, true));
+    }
+    if let Some(error) = app
+        .model
+        .extensions
+        .errors
+        .get(&id)
+        .map(|error| &error.message)
+    {
+        surfaces::empty_state(ui, p, Icon::Puzzle, "Extension view failed", error);
+    } else {
+        surfaces::empty_state(
+            ui,
+            p,
+            Icon::Puzzle,
+            "Loading extension view…",
+            "The extension is drawing this file.",
+        );
+    }
+    true
+}
+
 fn binary_preview(path: &str, text: &str) -> bool {
     binary_extension(path) || text.as_bytes().iter().take(1024).any(|byte| *byte == 0)
 }
@@ -1397,6 +1492,7 @@ struct ToolbarResult {
     reload: bool,
     save: bool,
     revert: bool,
+    export: bool,
 }
 
 #[derive(Default)]
@@ -1431,6 +1527,7 @@ fn toolbar(
     let now = ctx.input(|input| input.time);
     let saved = ready && !dirty && now - buffer.saved_at < SAVE_FLASH;
     let local = local_path(location, active);
+    let csv = viewers::is_csv(active) && local.is_file();
     let display = display_path(location, active);
     let copied_id = Id::unique("files-copied-at");
     let copied = ctx
@@ -1509,12 +1606,18 @@ fn toolbar(
     } else {
         0.0
     };
+    let export_width = if csv {
+        chip_width(&content, "Export to Excel") + 4.0
+    } else {
+        0.0
+    };
     let status_width = if ready { STATUS_SLOT } else { 0.0 };
 
     let available = content.available_width();
     let fixed = 4.0 * (surfaces::PANEL_ACTION + 4.0)
         + mode_width
         + save_width
+        + export_width
         + if dirty { revert_width } else { 0.0 };
     let mut extra = 0.0;
     let mut budget = (available - fixed - 120.0).max(0.0);
@@ -1596,6 +1699,20 @@ fn toolbar(
         }
         if markdown && let Some(mode) = mode_toggle(ui, p, preview) {
             set_preview_mode(ctx, active, mode);
+        }
+        if export_width > 0.0
+            && toolbar_chip(
+                ui,
+                p,
+                "Export to Excel",
+                false,
+                false,
+                true,
+                "Write a sibling .xlsx file",
+            )
+            .clicked()
+        {
+            result.export = true;
         }
         if flags.wrap
             && toolbar_chip(ui, p, "Wrap", buffer.wrap, false, true, "Toggle word wrap").clicked()

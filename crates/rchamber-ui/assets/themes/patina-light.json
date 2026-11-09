@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "id": "patina-light",
+    "name": "Patina",
+    "variant": "light",
+    "description": "Aged bronze and soft verdigris on warm paper.",
+    "version": "1.0.0",
+    "author": "RustChamber",
+    "tags": ["light", "warm", "teal", "patina"]
+  },
+  "colors": {
+    "primary": {
+      "base": "#3f7d6e",
+      "hover": "#356a5d",
+      "active": "#2b584d",
+      "muted": "#3f7d6e80"
+    },
+    "surface": {
+      "background": "#fbfaf6",
+      "foreground": "#3f443f",
+      "muted": "#f4f3ed",
+      "mutedForeground": "#666c65",
+      "elevated": "#eeece4",
+      "overlay": "#333a3420"
+    },
+    "interactive": {
+      "border": "#dcd9cfbf",
+      "selection": "#8ba79d2b",
+      "borderHover": "#c3c1b7",
+      "focusRing": "#3f7d6e55",
+      "cursor": "#333a34",
+      "hover": "#0000000a",
+      "active": "#00000014"
+    },
+    "status": {
+      "error": "#a94f45",
+      "warning": "#8a6a1f",
+      "success": "#4f7a4a",
+      "successForeground": "#ffffff",
+      "info": "#3d6f9c"
+    },
+    "syntax": {
+      "base": {
+        "background": "#f7f6f0",
+        "comment": "#93a297",
+        "keyword": "#2d6f5c",
+        "string": "#a85f45",
+        "number": "#317a86",
+        "function": "#5b7a2f",
+        "variable": "#a27637",
+        "type": "#2f7a80",
+        "operator": "#9c5454"
+      },
+      "tokens": {
+        "stringEscape": "#333a34",
+        "variableProperty": "#8c7424",
+        "variableLocal": "#b9b8ad",
+        "className": "#53649c",
+        "punctuation": "#666c65",
+        "url": "#376d94"
+      },
+      "highlights": {
+        "diffAdded": "#3d6f38",
+        "diffRemoved": "#9c5454",
+        "diffModified": "#3d6f38",
+        "diffModifiedBackground": "#5f8d3d20"
+      }
+    },
+    "pr": {
+      "blocked": "#8a5a2f",
+      "merged": "#6c5f97"
+    },
+    "chat": {
+      "userMessageBackground": "#eef2ec",
+      "divider": "#d7d4c9",
+      "background": "#fbfaf6"
+    },
+    "markdown": {
+      "link": "#2f6f78",
+      "linkHover": "#2b5f8f",
+      "inlineCode": "#2d6f5c",
+      "inlineCodeBackground": "#f7f6f0",
+      "blockquote": "#687067",
+      "blockquoteBorder": "#d7d4c9",
+      "listMarker": "#3f7d6e99",
+      "bold": "#343a34",
+      "italic": "#3f443f"
+    },
+    "tools": {
+      "border": "#d7d4c973",
+      "icon": "#666c65",
+      "title": "#3f443f",
+      "description": "#666c65",
+      "edit": {
+        "addedBackground": "#3d6f3825",
+        "removedBackground": "#9c545425",
+        "lineNumber": "#666c65"
+      }
+    }
+  },
+  "config": {
+    "transitions": {
+      "fast": "150ms ease",
+      "normal": "250ms ease",
+      "slow": "350ms ease"
+    }
+  }
+}

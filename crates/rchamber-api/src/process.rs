@@ -228,7 +228,7 @@ pub fn find_opencode_binary() -> Option<PathBuf> {
         candidates.push(home.join(".local").join("bin").join(file));
         candidates.push(home.join(".bun").join("bin").join(file));
         candidates.push(home.join(".npm-global").join("bin").join(file));
-        // OpenChamber ships the OpenCode 2 CLI under its resource directory.
+        // Some desktop apps ship the OpenCode 2 CLI under a resource directory.
         candidates.push(
             home.join(".local")
                 .join("share")

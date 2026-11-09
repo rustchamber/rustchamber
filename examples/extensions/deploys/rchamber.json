@@ -1,0 +1,39 @@
+{
+  "apiVersion": 1,
+  "id": "deploys-demo",
+  "name": "Deploys (demo)",
+  "version": "1.0.0",
+  "description": "A fake deploy board that shows every surface an extension can use.",
+  "icon": "rocket",
+  "runtime": { "kind": "lua", "entry": "main.lua" },
+  "capabilities": ["storage"],
+  "contributes": {
+    "panel": { "title": "Deploys" },
+    "statusSection": { "title": "Deploys", "method": "status", "interval": 5000 },
+    "mentions": { "label": "Deploys" },
+    "commands": [
+      { "name": "deploy", "description": "Ask the agent to deploy a service" }
+    ],
+    "actions": [
+      { "id": "explain", "label": "Explain this deploy", "where": "message" }
+    ],
+    "tools": [
+      {
+        "match": "mcp.deploys.*",
+        "name": "Deploys",
+        "title": "{input.service}",
+        "output": "table",
+        "columns": ["service", "state"]
+      }
+    ],
+    "blocks": [
+      {
+        "name": "Deploys",
+        "description": "A deploy card. Args: service name.",
+        "args": ["service"],
+        "answers": true
+      }
+    ],
+    "instructions": "Deploys run on Fly.io. Read the deploy notes before pushing to production."
+  }
+}

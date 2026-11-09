@@ -10,10 +10,12 @@ authors.workspace = true
 
 [dependencies]
 rchamber-api = { path = "../rchamber-api" }
+rchamber-ext = { path = "../rchamber-ext" }
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
 directories.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -22,3 +24,6 @@ tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

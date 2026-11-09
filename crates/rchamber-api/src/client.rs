@@ -13,6 +13,8 @@ use crate::models::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PromptFile {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uri: String,
     #[serde(default)]
     pub data: String,
     pub mime: String,
@@ -46,14 +48,26 @@ impl PromptFile {
         mime: impl Into<String>,
         description: Option<String>,
     ) -> Self {
+        let uri = uri.into();
         Self {
+            uri: uri.clone(),
             data: String::new(),
             mime: mime.into(),
-            source: PromptFileSource::Uri { uri: uri.into() },
+            source: PromptFileSource::Uri { uri },
             name,
             description,
             mention: None,
         }
+    }
+
+    pub fn from_path(
+        path: impl AsRef<std::path::Path>,
+        name: Option<String>,
+        mime: impl Into<String>,
+        description: Option<String>,
+    ) -> Option<Self> {
+        let uri = url::Url::from_file_path(path.as_ref()).ok()?.to_string();
+        Some(Self::path(uri, name, mime, description))
     }
 
     pub fn inline(
@@ -62,9 +76,11 @@ impl PromptFile {
         name: Option<String>,
         description: Option<String>,
     ) -> Self {
+        let mime = mime.into();
         Self {
+            uri: format!("data:{mime};base64,{data}"),
             data,
-            mime: mime.into(),
+            mime,
             source: PromptFileSource::Inline,
             name,
             description,
@@ -1060,5 +1076,17 @@ mod tests {
         assert!(ClientConfig::new("http://example.com").is_err());
         assert!(ClientConfig::new("https://user:token@example.com").is_err());
         assert!(ClientConfig::new("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn prompt_files_from_paths_carry_a_file_uri() {
+        let file =
+            PromptFile::from_path("/tmp/a b.md", Some("Guide".into()), "text/markdown", None)
+                .unwrap();
+        let value = serde_json::to_value(&file).unwrap();
+        assert_eq!(value["source"]["type"], "uri");
+        let uri = value["source"]["uri"].as_str().unwrap();
+        assert!(uri.starts_with("file://"));
+        assert!(uri.contains("a%20b.md"));
     }
 }

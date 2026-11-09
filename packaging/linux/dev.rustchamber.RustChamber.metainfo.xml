@@ -59,6 +59,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.9" date="2026-11-09">
+      <description>
+        <p>Native extensions, native document viewers, UI blocks, Run for shell blocks, session totals, rebindable shortcuts and Patina themes.</p>
+      </description>
+    </release>
     <release version="0.2.8" date="2026-11-07">
       <description>
         <p>Portable Linux packages, Flatpak support, and desktop theme detection.</p>

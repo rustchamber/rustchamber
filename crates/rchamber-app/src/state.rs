@@ -6,6 +6,7 @@ use rchamber_api::models::{
     Part, PermissionRequest, Project, Provider, ReasoningPart, Session, StructuredError, TextPart,
     ToolPart, ToolState, VcsInfo,
 };
+use rchamber_ext::Widget;
 
 use crate::action::{
     BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind, TrackedProject,
@@ -237,6 +238,32 @@ pub struct FilesState {
     pub active_tab: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExtensionFailure {
+    pub method: String,
+    pub message: String,
+}
+
+#[derive(Default)]
+pub struct ExtensionUiState {
+    pub installed: Vec<rchamber_ext::InstalledExtension>,
+    pub status: HashMap<String, Vec<Widget>>,
+    pub panels: HashMap<String, Vec<Widget>>,
+    pub blocks: HashMap<String, Vec<Widget>>,
+    pub errors: HashMap<String, ExtensionFailure>,
+    pub badges: HashMap<String, i64>,
+    pub mentions: Vec<crate::extensions::MentionRow>,
+}
+
+fn clear_failure(errors: &mut HashMap<String, ExtensionFailure>, extension_id: &str, method: &str) {
+    if errors
+        .get(extension_id)
+        .is_some_and(|failure| failure.method == method)
+    {
+        errors.remove(extension_id);
+    }
+}
+
 pub struct AppModel {
     pub connection: Connection,
     pub connection_detail: Option<String>,
@@ -269,6 +296,13 @@ pub struct AppModel {
     pub show_settings: bool,
     pub show_sidebar: bool,
     pub palette_open: bool,
+    pub extensions: ExtensionUiState,
+    pub pending_open_session: Option<String>,
+    pub pending_open_url: Option<String>,
+    pub pending_clipboard: Option<String>,
+    pub pending_compose: Option<String>,
+    pub pending_extension_panel: Option<String>,
+    pub pending_extension_approval: Option<String>,
 }
 
 impl Default for AppModel {
@@ -305,6 +339,13 @@ impl Default for AppModel {
             show_settings: false,
             show_sidebar: true,
             palette_open: false,
+            extensions: ExtensionUiState::default(),
+            pending_open_session: None,
+            pending_open_url: None,
+            pending_clipboard: None,
+            pending_compose: None,
+            pending_extension_panel: None,
+            pending_extension_approval: None,
         }
     }
 }
@@ -493,6 +534,130 @@ impl AppModel {
                         chat.turn_started = Some(now_ms());
                     }
                 }
+            }
+            BackendEvent::Extensions(extensions) => {
+                self.extensions.installed = extensions;
+                let active: HashSet<String> = self
+                    .extensions
+                    .installed
+                    .iter()
+                    .filter(|extension| extension.is_active())
+                    .map(|extension| extension.manifest.id.clone())
+                    .collect();
+                self.extensions.status.retain(|id, _| active.contains(id));
+                self.extensions.panels.retain(|id, _| active.contains(id));
+                self.extensions.badges.retain(|id, _| active.contains(id));
+                self.extensions.errors.retain(|id, _| active.contains(id));
+                self.extensions
+                    .mentions
+                    .retain(|row| active.contains(&row.extension_id));
+            }
+            BackendEvent::ExtensionInstalled { extension_id } => {
+                let has_panel = self.extensions.installed.iter().any(|extension| {
+                    extension.manifest.id == extension_id
+                        && extension.manifest.contributes.panel.is_some()
+                });
+                if has_panel {
+                    self.pending_extension_approval = Some(extension_id);
+                }
+            }
+            BackendEvent::ExtensionResult {
+                call_id,
+                extension_id,
+                method,
+                value,
+            } => {
+                let widgets = rchamber_ext::manifest::root_widget(&value);
+                if method == "status" || call_id == "status" {
+                    if let Some(widgets) = widgets {
+                        self.extensions.status.insert(extension_id.clone(), widgets);
+                        clear_failure(&mut self.extensions.errors, &extension_id, "status");
+                    } else {
+                        self.extensions.errors.insert(
+                            extension_id,
+                            ExtensionFailure {
+                                method: "status".into(),
+                                message: "The extension did not return a valid status tree.".into(),
+                            },
+                        );
+                    }
+                } else if method == "panel" || call_id == "panel" {
+                    if let Some(widgets) = widgets {
+                        self.extensions.panels.insert(extension_id.clone(), widgets);
+                        clear_failure(&mut self.extensions.errors, &extension_id, "panel");
+                    } else {
+                        self.extensions.errors.insert(
+                            extension_id,
+                            ExtensionFailure {
+                                method: "panel".into(),
+                                message: "The extension did not return a valid panel tree.".into(),
+                            },
+                        );
+                    }
+                } else if call_id == "panel-action" {
+                    if let Some(widgets) = widgets {
+                        self.extensions.panels.insert(extension_id.clone(), widgets);
+                        clear_failure(&mut self.extensions.errors, &extension_id, "panel");
+                    }
+                } else if let Some(widgets) = widgets
+                    && !widgets.is_empty()
+                {
+                    self.extensions.panels.insert(extension_id.clone(), widgets);
+                    self.pending_extension_panel = Some(extension_id);
+                }
+            }
+            BackendEvent::ExtensionBlock { key, widgets } => {
+                self.extensions.blocks.insert(key, widgets);
+            }
+            BackendEvent::ExtensionMentions { extension_id, rows } => {
+                self.extensions
+                    .mentions
+                    .retain(|row| row.extension_id != extension_id);
+                self.extensions.mentions.extend(rows);
+            }
+            BackendEvent::ExtensionError {
+                extension_id,
+                method,
+                message,
+                ..
+            } => {
+                self.extensions.errors.insert(
+                    extension_id.clone(),
+                    ExtensionFailure {
+                        method: method.clone(),
+                        message: message.clone(),
+                    },
+                );
+                self.toast(
+                    ToastKind::Error,
+                    format!("Extension {extension_id} failed in {method}: {message}"),
+                );
+            }
+            BackendEvent::ExtensionCompose { text, .. } => {
+                self.pending_compose = Some(text);
+            }
+            BackendEvent::ExtensionAttach { title, url, .. } => {
+                self.pending_compose = Some(match url {
+                    Some(url) => format!("[{title}]({url})"),
+                    None => title,
+                });
+            }
+            BackendEvent::ExtensionBadge { id, count } => match count {
+                Some(count) => {
+                    self.extensions.badges.insert(id, count);
+                }
+                None => {
+                    self.extensions.badges.remove(&id);
+                }
+            },
+            BackendEvent::ExtensionOpenSession(id) => {
+                self.pending_open_session = Some(id);
+            }
+            BackendEvent::ExtensionClipboard(text) => {
+                self.pending_clipboard = Some(text);
+            }
+            BackendEvent::ExtensionOpenUrl(url) => {
+                self.pending_open_url = Some(url);
             }
         }
     }
@@ -1544,5 +1709,72 @@ mod tests {
         ))));
 
         assert_eq!(model.active_id(), Some("r1"));
+    }
+
+    fn extension(id: &str, panel: bool) -> rchamber_ext::InstalledExtension {
+        let mut manifest: rchamber_ext::manifest::Manifest =
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "name": id,
+                "version": "1.0.0"
+            }))
+            .unwrap();
+        if panel {
+            manifest.contributes.panel = Some(rchamber_ext::manifest::PanelContribution {
+                title: Some(id.into()),
+                icon: None,
+            });
+        }
+        rchamber_ext::InstalledExtension {
+            manifest,
+            root: std::path::PathBuf::from("/tmp/extension"),
+            source: rchamber_ext::InstallSource::Builtin,
+            enabled: true,
+            grants: Vec::new(),
+            installed_at: 0,
+            settings: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn installing_a_panel_extension_requests_approval() {
+        let mut model = AppModel::default();
+        model.apply(BackendEvent::Extensions(vec![extension("demo", true)]));
+        model.apply(BackendEvent::ExtensionInstalled {
+            extension_id: "demo".into(),
+        });
+        assert_eq!(model.pending_extension_approval.as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn a_panel_action_with_no_tree_is_not_an_error() {
+        let mut model = AppModel::default();
+        model.apply(BackendEvent::ExtensionResult {
+            call_id: "panel-action".into(),
+            extension_id: "demo".into(),
+            method: "command".into(),
+            value: serde_json::Value::Null,
+        });
+        assert!(model.extensions.errors.is_empty());
+    }
+
+    #[test]
+    fn an_invalid_panel_tree_reports_and_a_valid_tree_clears_it() {
+        let mut model = AppModel::default();
+        model.apply(BackendEvent::ExtensionResult {
+            call_id: "panel".into(),
+            extension_id: "demo".into(),
+            method: "panel".into(),
+            value: serde_json::json!({ "not": "a tree" }),
+        });
+        assert!(model.extensions.errors.contains_key("demo"));
+
+        model.apply(BackendEvent::ExtensionResult {
+            call_id: "panel".into(),
+            extension_id: "demo".into(),
+            method: "panel".into(),
+            value: serde_json::json!([{ "kind": "heading", "text": "Hello" }]),
+        });
+        assert!(!model.extensions.errors.contains_key("demo"));
     }
 }

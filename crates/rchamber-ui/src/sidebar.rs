@@ -799,7 +799,7 @@ fn more_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             let response = crate::widgets::menu_item(ui, label, Some(icon), None, p);
             if response.clicked() {
                 app.model
-                    .toast(ToastKind::Info, "Available with an OpenChamber server");
+                    .toast(ToastKind::Info, "Not available in this build yet");
                 state = false;
             }
             items.push(response);
@@ -817,7 +817,7 @@ fn more_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             let response = crate::widgets::menu_item(ui, label, Some(icon), None, p);
             if response.clicked() {
                 app.model
-                    .toast(ToastKind::Info, "Available with an OpenChamber server");
+                    .toast(ToastKind::Info, "Not available in this build yet");
                 state = false;
             }
             items.push(response);
@@ -2748,11 +2748,50 @@ fn session_menu(
         if response.clicked() {
             app.model.toast(
                 ToastKind::Info,
-                "Mini Chat is available in the OpenChamber desktop app",
+                "Mini Chat is not available in this build yet",
             );
             app.ui.session_menu = None;
         }
         items.push(response);
+        let extension_actions: Vec<(String, String, String)> = app
+            .model
+            .extensions
+            .installed
+            .iter()
+            .filter(|extension| extension.is_active())
+            .flat_map(|extension| {
+                let id = extension.manifest.id.clone();
+                extension
+                    .manifest
+                    .contributes
+                    .actions
+                    .iter()
+                    .filter(|action| action.target == "session")
+                    .map(move |action| (id.clone(), action.id.clone(), action.label.clone()))
+            })
+            .collect();
+        if !extension_actions.is_empty() {
+            ui.add_space(2.0);
+            crate::widgets::hline(ui, p, 0.0);
+            ui.add_space(2.0);
+            for (extension_id, action_id, label) in extension_actions {
+                let response = crate::widgets::menu_item(ui, &label, Some(Icon::Puzzle), None, p);
+                if response.clicked() {
+                    app.backend.send(Action::ExtensionAction {
+                        id: extension_id,
+                        action: action_id,
+                        item: serde_json::json!({
+                            "kind": "session",
+                            "id": session.id,
+                            "title": session.title(),
+                            "directory": session.directory(),
+                        }),
+                    });
+                    app.ui.session_menu = None;
+                }
+                items.push(response);
+            }
+        }
         ui.add_space(2.0);
         crate::widgets::hline(ui, p, 0.0);
         ui.add_space(2.0);

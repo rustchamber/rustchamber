@@ -69,7 +69,7 @@ flatpak run dev.rustchamber.RustChamber
 The wrappers expect these on the host:
 
 - OpenCode 2.x (`opencode`) in `PATH`, `~/.opencode/bin`, `~/.local/bin`, or the
-  OpenChamber bundled CLI. OpenCode 1.x is not compatible with the current API.
+  bundled CLI from a compatible desktop app. OpenCode 1.x is not compatible with the current API.
 - `git`
 - the login shell from `/etc/passwd`
 - `xdg-open` (xdg-utils)

@@ -1,6 +1,7 @@
 pub mod files;
 pub mod git;
 pub mod terminal;
+pub mod viewers;
 
 use std::time::Duration;
 
@@ -145,6 +146,7 @@ pub enum Surface {
     Git,
     Files,
     Terminal,
+    Extension,
 }
 
 impl Surface {
@@ -165,6 +167,7 @@ impl Surface {
             Surface::Git => "Git",
             Surface::Files => "Files",
             Surface::Terminal => "Terminal",
+            Surface::Extension => "Extension",
         }
     }
 
@@ -176,6 +179,7 @@ impl Surface {
             Surface::Git => Icon::Branch,
             Surface::Files => Icon::File,
             Surface::Terminal => Icon::Terminal,
+            Surface::Extension => Icon::Puzzle,
         }
     }
 }

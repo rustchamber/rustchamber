@@ -335,8 +335,8 @@ fn editor_job(text: &str, p: &Palette, wrap_width: f32, line_height: f32) -> Lay
             &text[span.start_byte..span.end_byte],
             0.0,
             TextFormat {
-                font_id: theme::font(EDITOR_FONT * 0.875),
-                color: p.fg,
+                font_id: theme::font(EDITOR_FONT),
+                color: p.blue,
                 line_height: Some(line_height),
                 ..Default::default()
             },
@@ -472,7 +472,6 @@ fn paint_chips(
     output: &egui::widgets::text_edit::TextEditOutput,
     text: &str,
     text_id: Id,
-    p: &Palette,
     clip: Rect,
 ) {
     let spans = token_spans(text);
@@ -515,17 +514,8 @@ fn paint_chips(
     if chips.is_empty() {
         return;
     }
-    let painter = ui.painter().with_clip_rect(clip);
     let mut clicked = None;
     for (span, rect) in &chips {
-        let fill = p.over(p.card, p.alpha(p.bg, 128));
-        painter.rect_filled(*rect, CornerRadius::same(theme::radius::MD), fill);
-        painter.rect_stroke(
-            *rect,
-            CornerRadius::same(theme::radius::MD),
-            Stroke::new(1.0, p.alpha(p.border, 134)),
-            StrokeKind::Inside,
-        );
         let response = ui.interact(
             *rect,
             Id::unique(("composer-chip", text_id, span.start_byte)),
@@ -858,12 +848,59 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
             })
         };
         let hint = placeholder_text(ui, home);
+        if ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<bool>(Id::unique("focus-composer-once")))
+            .unwrap_or(false)
+        {
+            ui.ctx().memory_mut(|memory| memory.request_focus(text_id));
+        }
+        if ui.input(|input| input.modifiers.shift && input.key_pressed(Key::Enter))
+            && let Some(state) = TextEditState::load(ui.ctx(), text_id)
+        {
+            let caret = state
+                .cursor
+                .char_range()
+                .map(|range| range.primary.index.0)
+                .unwrap_or_else(|| draft.chars().count());
+            let byte = char_to_byte(&draft, caret);
+            let line_start = draft[..byte]
+                .rfind('\n')
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let line = &draft[line_start..byte];
+            let indent_len = line.len() - line.trim_start().len();
+            let trimmed = line.trim_start();
+            if let Some((number, _)) = trimmed.split_once(". ")
+                && !number.is_empty()
+                && number.chars().all(|ch| ch.is_ascii_digit())
+                && let Ok(number) = number.parse::<u32>()
+            {
+                ui.input_mut(|input| {
+                    input.consume_key(Modifiers::SHIFT, Key::Enter);
+                });
+                let indent = &line[..indent_len];
+                let insert = format!("\n{indent}{}. ", number + 1);
+                draft.insert_str(byte, &insert);
+                if let Some(mut state) = TextEditState::load(ui.ctx(), text_id) {
+                    state
+                        .cursor
+                        .set_char_range(Some(CCursorRange::one(CCursor::new(
+                            caret + insert.chars().count(),
+                        ))));
+                    state.store(ui.ctx(), text_id);
+                }
+                ui.ctx().memory_mut(|memory| memory.request_focus(text_id));
+            }
+        }
         let scroll = ScrollArea::vertical()
             .id_salt(("composer-editor", &session_id))
             .max_height(EDITOR_MAX_HEIGHT)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
+                let editor_width = ui.available_width().max(40.0);
+                ui.set_width(editor_width);
                 let output = TextEdit::multiline(&mut draft)
                     .id(text_id)
                     .event_filter(egui::EventFilter {
@@ -880,7 +917,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
                     }))
                     .min_size(Vec2::new(0.0, EDITOR_MIN_HEIGHT))
                     .desired_rows(1)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(editor_width)
                     .hint_text(
                         RichText::new(hint)
                             .font(theme::font(EDITOR_FONT))
@@ -909,7 +946,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
         ) {
             set_cursor_to_end(ui.ctx(), text_id, &draft);
         }
-        paint_chips(ui, &output, &draft, text_id, &p, scroll.inner_rect);
+        paint_chips(ui, &output, &draft, text_id, scroll.inner_rect);
         caret_anchor = caret_anchor_of(&output, &draft, text_id);
         if let Some(anchor) = caret_anchor {
             ui.memory_mut(|memory| {
@@ -1017,55 +1054,73 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
     }
 
     if send && (!draft.trim().is_empty() || app.model.has_attachments(&key)) {
-        let text = draft.clone();
-        let files = app.model.attachments_for(&key);
-        let delivery = if busy && !send_now { "queue" } else { "steer" };
-        if home {
-            let model = current_model(app);
-            let agent = current_agent(app);
-            let directory = app.home_target_directory();
-            if let Some(target) = app.ui.home_project.clone()
-                && target != crate::app::CHATS_TARGET
-            {
-                app.model.workspace_store.mark_active_project(&target);
-            }
-            if let Some(target) = app.ui.home_project.clone() {
-                app.model.workspace_store.new_session_drafts.remove(&target);
-            }
-            app.model.workspace_store.save();
-            actions.push(Action::CreateSession {
-                directory,
-                prompt: Some(text),
-                files,
-                model,
-                agent,
-                allow_all: app.ui.home_allow_all,
-            });
+        let raw = draft.clone();
+        let mut handled = false;
+        if let Some((id, name, args)) = extension_command(app, &raw) {
+            app.backend
+                .send(Action::ExtensionCommand { id, name, args });
             draft.clear();
-        } else if let Some(id) = &session_id {
-            if let Some(session) = app.model.sessions.iter().find(|session| &session.id == id)
-                && !app.model.is_work(session)
-            {
-                app.model.set_work_local(id, true);
-                actions.push(Action::SetSessionWork {
-                    id: id.clone(),
-                    work: true,
-                });
+            if home {
+                app.ui.home_draft.clear();
+            } else if let Some(chat) = &mut app.model.active {
+                chat.draft.clear();
             }
-            actions.push(Action::Send {
-                session_id: id.clone(),
-                text,
-                files,
-                delivery: delivery.into(),
-            });
-            ui.memory_mut(|memory| {
-                memory
-                    .data
-                    .insert_temp(Id::unique(("chat-pin", id.as_str())), true)
-            });
-            draft.clear();
+            handled = true;
         }
-        app.model.clear_attachments(&key);
+        if !handled {
+            let (text, guide) = expand_extension_command(&raw);
+            let mut files = app.model.attachments_for(&key);
+            if let Some(guide) = guide {
+                files.push(guide);
+            }
+            let delivery = if busy && !send_now { "queue" } else { "steer" };
+            if home {
+                let model = current_model(app);
+                let agent = current_agent(app);
+                let directory = app.home_target_directory();
+                if let Some(target) = app.ui.home_project.clone()
+                    && target != crate::app::CHATS_TARGET
+                {
+                    app.model.workspace_store.mark_active_project(&target);
+                }
+                if let Some(target) = app.ui.home_project.clone() {
+                    app.model.workspace_store.new_session_drafts.remove(&target);
+                }
+                app.model.workspace_store.save();
+                actions.push(Action::CreateSession {
+                    directory,
+                    prompt: Some(text),
+                    files,
+                    model,
+                    agent,
+                    allow_all: app.ui.home_allow_all,
+                });
+                draft.clear();
+            } else if let Some(id) = &session_id {
+                if let Some(session) = app.model.sessions.iter().find(|session| &session.id == id)
+                    && !app.model.is_work(session)
+                {
+                    app.model.set_work_local(id, true);
+                    actions.push(Action::SetSessionWork {
+                        id: id.clone(),
+                        work: true,
+                    });
+                }
+                actions.push(Action::Send {
+                    session_id: id.clone(),
+                    text,
+                    files,
+                    delivery: delivery.into(),
+                });
+                ui.memory_mut(|memory| {
+                    memory
+                        .data
+                        .insert_temp(Id::unique(("chat-pin", id.as_str())), true)
+                });
+                draft.clear();
+            }
+            app.model.clear_attachments(&key);
+        }
     }
 
     if home {
@@ -3575,6 +3630,85 @@ fn apply_picker_choice(draft: &mut String, picker: &Picker, value: &str) -> Opti
     Some(prefix + inserted.chars().count())
 }
 
+fn char_to_byte(text: &str, index: usize) -> usize {
+    text.char_indices()
+        .nth(index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
+}
+
+fn expand_extension_command(text: &str) -> (String, Option<rchamber_api::PromptFile>) {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix("/new-extension") else {
+        return (text.to_string(), None);
+    };
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return (text.to_string(), None);
+    }
+    let materialized = rchamber_ext::materialize_authoring_skill().ok();
+    let guide = materialized.as_ref().and_then(|path| {
+        rchamber_api::PromptFile::from_path(
+            path,
+            Some("RustChamber extension guide".into()),
+            "text/markdown",
+            Some("Read this before writing the extension.".into()),
+        )
+    });
+    let fallback = materialized
+        .as_ref()
+        .map(|path| {
+            format!(
+                " If the attachment is unavailable, read {} and follow it.",
+                path.display()
+            )
+        })
+        .unwrap_or_default();
+    let attachment = if guide.is_some() {
+        " Follow the attached guide."
+    } else {
+        ""
+    };
+    (
+        format!(
+            "Build the RustChamber extension described below. Keep it minimal and finish quickly: one panel or one status section, no test harness, no repository exploration, and at most one `rchamber ext check`.{attachment}{fallback}\n\n{}",
+            rest.trim()
+        ),
+        guide,
+    )
+}
+
+fn extension_command(app: &RustChamber, text: &str) -> Option<(String, String, String)> {
+    let trimmed = text.trim_start();
+    let rest = trimmed.strip_prefix('/')?;
+    let (name, args) = match rest.find(char::is_whitespace) {
+        Some(index) => (&rest[..index], rest[index..].trim()),
+        None => (rest, ""),
+    };
+    if name == "new-extension"
+        || app
+            .model
+            .commands
+            .iter()
+            .any(|command| command.name == name)
+    {
+        return None;
+    }
+    let extension = app.model.extensions.installed.iter().find(|extension| {
+        extension.is_active()
+            && extension
+                .manifest
+                .contributes
+                .commands
+                .iter()
+                .any(|command| command.name == name)
+    })?;
+    Some((
+        extension.manifest.id.clone(),
+        name.to_string(),
+        args.to_string(),
+    ))
+}
+
 fn composer_picker(
     ctx: &egui::Context,
     app: &RustChamber,
@@ -3621,6 +3755,48 @@ fn composer_picker(
                             .insert_temp(Id::unique("mention-query"), (query.clone(), now))
                     });
                 }
+            }
+            let last = ctx.memory(|memory| {
+                memory
+                    .data
+                    .get_temp::<(String, f64)>(Id::unique("ext-mention-query"))
+            });
+            let now = ctx.input(|input| input.time);
+            if last
+                .as_ref()
+                .map(|(previous, at)| previous != &query || now - at > 0.25)
+                .unwrap_or(true)
+            {
+                app.backend.send(Action::ExtensionMentions {
+                    query: query.clone(),
+                });
+                ctx.memory_mut(|memory| {
+                    memory
+                        .data
+                        .insert_temp(Id::unique("ext-mention-query"), (query.clone(), now))
+                });
+            }
+            for row in &app.model.extensions.mentions {
+                if items.len() >= POPUP_LIMIT {
+                    break;
+                }
+                if !query.is_empty()
+                    && !row.label.to_lowercase().contains(&query)
+                    && !row.detail.to_lowercase().contains(&query)
+                {
+                    continue;
+                }
+                items.push(PickerItem {
+                    value: row.text.clone(),
+                    label: row.label.clone(),
+                    detail: if row.detail.is_empty() {
+                        row.extension_name.clone()
+                    } else {
+                        format!("{} · {}", row.extension_name, row.detail)
+                    },
+                    icon: Icon::Puzzle,
+                    section: "Extensions",
+                });
             }
             for agent in app.model.primary_agents() {
                 if !query.is_empty()
@@ -3729,6 +3905,51 @@ fn composer_picker(
             }
         }
         _ => {
+            let new_extension = "new-extension";
+            if query.is_empty() || new_extension.contains(&query) {
+                items.push(PickerItem {
+                    value: new_extension.into(),
+                    label: "/new-extension".into(),
+                    detail: "Build a RustChamber extension with the agent".into(),
+                    icon: Icon::Puzzle,
+                    section: "RustChamber",
+                });
+            }
+            for extension in app
+                .model
+                .extensions
+                .installed
+                .iter()
+                .filter(|extension| extension.is_active())
+            {
+                for command in &extension.manifest.contributes.commands {
+                    if items.len() >= POPUP_LIMIT {
+                        break;
+                    }
+                    if !query.is_empty() && !command.name.to_lowercase().contains(&query) {
+                        continue;
+                    }
+                    if command.name == "new-extension"
+                        || app
+                            .model
+                            .commands
+                            .iter()
+                            .any(|builtin| builtin.name == command.name)
+                    {
+                        continue;
+                    }
+                    items.push(PickerItem {
+                        value: command.name.clone(),
+                        label: format!("/{}", command.name),
+                        detail: command
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| extension.manifest.name.clone()),
+                        icon: Icon::Puzzle,
+                        section: "Extensions",
+                    });
+                }
+            }
             for command in &app.model.commands {
                 if items.len() >= POPUP_LIMIT {
                     break;
@@ -3859,6 +4080,9 @@ fn composer_autocomplete_popup(
     composer_rect: Rect,
     area: Rect,
 ) -> Option<String> {
+    if picker.items.is_empty() {
+        return None;
+    }
     let t = motion::animate_bool_with_time(
         ctx,
         Id::unique("composer-picker-motion"),
@@ -3890,7 +4114,6 @@ fn composer_autocomplete_popup(
         .fixed_pos(Pos2::new(placement.left, bottom))
         .pivot(egui::Align2::LEFT_BOTTOM)
         .constrain(false)
-        .default_size(Vec2::new(placement.width, placement.max_height))
         .show(ctx, |ui| {
             let frame = popover_frame(p).inner_margin(Margin::same(POPUP_INSET as i8));
             frame.show(ui, |ui| {
@@ -4312,6 +4535,33 @@ mod tests {
     }
 
     #[test]
+    fn a_single_item_popup_stays_compact() {
+        let ctx = egui::Context::default();
+        let context = ctx.clone();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            let picker = test_picker(1);
+            let anchor = CaretAnchor {
+                trigger: Rect::from_min_size(Pos2::new(100.0, 500.0), Vec2::new(2.0, 20.0)),
+            };
+            let composer = Rect::from_min_size(Pos2::new(80.0, 540.0), Vec2::new(600.0, 100.0));
+            let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+            let _ = composer_autocomplete_popup(
+                &context,
+                &Palette::dark(),
+                &picker,
+                anchor,
+                composer,
+                area,
+            );
+            let rect = context
+                .memory(|memory| memory.area_rect(Id::unique("composer-autocomplete")))
+                .expect("popup area");
+            assert!(rect.height() < POPUP_MIN_HEIGHT, "height {}", rect.height());
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn popup_area_is_anchored_above_the_composer() {
         let rect = popup_area_rect(&test_picker(1));
         assert!(rect.height() < POPUP_MIN_HEIGHT);
@@ -4321,7 +4571,12 @@ mod tests {
     fn popup_area_grows_up_to_its_cap() {
         let rect = popup_area_rect(&test_picker(20));
         assert!(
-            (rect.height() - POPUP_MAX_HEIGHT).abs() <= 1.0,
+            rect.height() <= POPUP_MAX_HEIGHT + 1.0,
+            "height {}",
+            rect.height()
+        );
+        assert!(
+            rect.height() >= POPUP_MIN_HEIGHT,
             "height {}",
             rect.height()
         );
@@ -4388,5 +4643,22 @@ mod tests {
         let spans = token_spans("/usr/bin ");
         assert_eq!(spans.len(), 1);
         assert_eq!(token_spans("/usr/bin").len(), 0);
+    }
+
+    #[test]
+    fn new_extension_expands_into_a_short_prompt_and_a_guide() {
+        let (text, guide) = expand_extension_command("/new-extension a deploy board");
+        assert!(text.contains("a deploy board"));
+        assert!(text.contains("attached guide"));
+        assert!(text.chars().count() < 400);
+        let guide = guide.unwrap();
+        assert!(guide.uri.starts_with("file://"));
+        assert!(guide.uri.contains("SKILL.md"));
+        assert_eq!(guide.mime, "text/markdown");
+        assert_eq!(
+            expand_extension_command("/new-extensionish").0,
+            "/new-extensionish"
+        );
+        assert_eq!(expand_extension_command("hello").0, "hello");
     }
 }

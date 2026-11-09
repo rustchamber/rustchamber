@@ -27,9 +27,10 @@ something changed, so an idle window costs almost no CPU.
 | `rchamber-git` | Git CLI wrapper with timeouts and porcelain parsing |
 | `rchamber-term` | PTY sessions and a VT emulator |
 | `rchamber-update` | Release discovery, platform asset selection, background download, verification, and self-install |
+| `rchamber-ext` | Extension manifest, registry, install/approval, Lua sandbox, declarative widget schema, authoring skill |
 | `rchamber-app` | Action and event types, backend actor, state projection, project/session store, drafts, attachments, snippets |
 | `rchamber-ui` | egui shell, chat, composer, panels, settings, theme engine |
-| `rchamber` | Binary entry point |
+| `rchamber` | Binary entry point; `rchamber ext check <folder>` validates an extension |
 
 Dependencies point downward: `rchamber` depends on `rchamber-ui`; the UI depends on
 `rchamber-app`, `rchamber-git`, `rchamber-term`, and `rchamber-update`; the app depends on
@@ -127,6 +128,28 @@ before delivery.
   stores cells, colors, cursor, scrollback, and the alternate screen. Input encoding covers
   control keys, arrows, function keys, and Alt combinations.
 
+## Extensions
+
+An extension is a folder with `rchamber.json` and a Lua entry point. The registry lives in
+the app data directory (`extensions/extensions.json`), installs are approved capability by
+capability, and each enabled extension gets a worker thread with its own `mlua` state. The
+sandbox exposes only the host functions the manifest asked for: storage, prompts, sessions,
+project files, allowlisted HTTPS origins, notifications, clipboard and, when explicitly
+approved, `exec`.
+
+The UI is declarative. `rchamber-ext` defines a `Widget` tree (text, tables, charts, forms,
+buttons, tabs, details and so on); extension panels, status sections and chat blocks all
+return that tree. The same schema is parsed from the agent's `openui-lang` fences, so a
+block written by the model and a block drawn by an extension use one renderer. Actions and
+forms return a `BlockResponse`; a chat block sends it as a user message, a panel or status
+section routes it back to the extension's `command` function.
+
+The `rchamber-ext` worker communicates with the backend actor through two channels: worker
+results (`WorkerEvent`) and host calls/effects (`BridgeMessage`). A host call blocks the
+extension thread only; the UI keeps painting. Extension instructions are appended to the
+prompt just before it is sent, and `turn.finished` / `permission.asked` events are broadcast
+to extensions that declared them.
+
 ## Theme engine
 
 Palettes come from bundled JSON theme files. Each file defines a light or dark variant; the
@@ -154,5 +177,5 @@ backend settles, and exits. It is used for the screenshots in this repository.
 
 The app reads provider, agent, command, and skill catalogs but does not write their
 configuration. It does not bundle the OpenCode binary; the CLI is installed separately.
-There is no embedded browser, plugin host, or silent updater. These are deliberate limits of
-the current scope, not hidden placeholders.
+There is no embedded browser, no JavaScript runtime, and no silent updater. The extension
+host is native: sandboxed Lua and a widget renderer, never an iframe.

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 rchamber-api = { path = "../rchamber-api" }
 rchamber-app = { path = "../rchamber-app" }
+rchamber-ext = { path = "../rchamber-ext" }
 rchamber-ui = { path = "../rchamber-ui" }
 anyhow.workspace = true
 eframe.workspace = true

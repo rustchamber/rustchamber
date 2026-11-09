@@ -1,0 +1,25 @@
+[package]
+name = "rchamber-ext"
+description = "Native extensions for RustChamber: manifests, registry, declarative UI and the Lua host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+directories.workspace = true
+mlua = { version = "0.12", features = ["lua54", "vendored", "serialize"] }
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -15,6 +15,7 @@ rchamber-git = { path = "../rchamber-git" }
 rchamber-term = { path = "../rchamber-term" }
 rchamber-update = { path = "../rchamber-update" }
 arboard = "3.7"
+calamine.workspace = true
 chrono.workspace = true
 directories.workspace = true
 eframe.workspace = true
@@ -23,12 +24,21 @@ egui_commonmark.workspace = true
 egui_extras.workspace = true
 image.workspace = true
 open.workspace = true
+parquet.workspace = true
+quick-xml.workspace = true
+rchamber-ext = { path = "../rchamber-ext" }
 rfd.workspace = true
+rusqlite.workspace = true
+rust_xlsxwriter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+zip.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd.workspace = true
 futures-util.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

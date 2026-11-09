@@ -33,6 +33,8 @@ pub struct Settings {
     pub bottom_height: f32,
     #[serde(default)]
     pub draft_starters: Vec<String>,
+    #[serde(default)]
+    pub keybindings: std::collections::BTreeMap<String, String>,
     #[serde(skip)]
     pub theme_migrated: bool,
 }
@@ -73,6 +75,7 @@ impl Default for Settings {
             zone_width: 640.0,
             bottom_height: 320.0,
             draft_starters: Vec::new(),
+            keybindings: std::collections::BTreeMap::new(),
             theme_migrated: false,
         }
     }

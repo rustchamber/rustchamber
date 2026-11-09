@@ -1,9 +1,32 @@
 # Changelog
 
+## 0.2.9 - 2026-11-09
+
+- Native extensions: a folder with `rchamber.json` and Lua adds panels, status sections,
+  `@` mentions, slash commands, message actions, tool renderers and chat blocks. Install by
+  folder, zip or https archive, review one capability list, and disable without losing data.
+- `/new-extension` teaches the agent the native API and ends with an install link that opens
+  the approval sheet. `rchamber ext check <folder>` validates a package from the terminal.
+- Native `openui-lang` blocks in chat: tables, charts, stats, progress, steps, choices,
+  inputs, sliders and buttons draw with the app's own theme.
+- Shell code blocks in a finished reply have a Run button and show their output in place.
+- Native read-only file viewers for SQLite, Parquet, ZIP, Jupyter, XLSX/ODS, DOCX and PPTX;
+  CSV exports to Excel.
+- Settings → Shortcuts is searchable and every listed command can be rebound or cleared.
+- Chat text size is independent from the interface scale.
+- Session totals aggregate every assistant message, next to the existing turn stats.
+- New Patina light and dark themes.
+- Session ids in a message open the session; Shift+Enter continues a numbered list; a
+  message can be quoted with “Looks good” in one click.
+- Extension tool calls show their declared title, icon and table/code output.
+- Extension panels open automatically after approval, use the puzzle-piece icon, and share
+  the close and maximize controls of every other panel. Invalid panel trees show a readable
+  error instead of a loading spinner, and JSON nulls from the host reach Lua as nil.
+
 ## 0.2.8
 
 - Prefer the OpenCode 2 CLI over an older OpenCode 1 installation. OpenCode 2 is required by the current API; a version 1 binary now produces a clear error instead of an HTTP 400.
-- The Flatpak wrapper also prefers the OpenCode 2 binary bundled with OpenChamber when present.
+- The Flatpak wrapper also prefers the OpenCode 2 binary bundled with a compatible desktop app when present.
 
 ## 0.2.7
 

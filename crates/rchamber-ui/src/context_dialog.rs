@@ -91,6 +91,8 @@ struct RawRow {
 pub fn show_panel(ui: &mut Ui, app: &mut RustChamber) {
     let p = app.palette.clone();
     let mut close = false;
+    let mut toggle_expanded = false;
+    let expanded = app.ui.expanded;
     let tabs = [crate::surfaces::PanelTab::new("Context", Icon::Circle).active(true)];
     crate::surfaces::panel_header(
         ui,
@@ -101,10 +103,16 @@ pub fn show_panel(ui: &mut Ui, app: &mut RustChamber) {
             if crate::surfaces::close_button(ui, &p).clicked() {
                 close = true;
             }
+            if crate::surfaces::expand_button(ui, &p, expanded).clicked() {
+                toggle_expanded = true;
+            }
         },
     );
     if close {
         app.ui.context_open = false;
+    }
+    if toggle_expanded {
+        app.ui.expanded = !app.ui.expanded;
     }
 
     let Some(chat) = app.model.active.as_ref() else {

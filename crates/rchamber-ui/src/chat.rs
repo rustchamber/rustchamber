@@ -13,6 +13,7 @@ use rchamber_api::models::{
 };
 use rchamber_app::format::{time_label, tool_detail, tool_label};
 use rchamber_app::{Action, now_ms};
+use rchamber_ext::ToolRenderer;
 
 use crate::app::RustChamber;
 use crate::composer;
@@ -70,6 +71,11 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     };
     let p = app.palette.clone();
     let area_rect = ui.max_rect();
+    app.md.scale = app.settings.appearance.chat_scale;
+    set_tool_renderers(ui.ctx(), tool_renderers(app));
+    set_message_actions(ui.ctx(), message_actions(app));
+    let host = block_host(app, &session_id);
+    crate::blocks::set_host(ui.ctx(), host);
 
     let outcome = egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(p.bg))
@@ -77,10 +83,99 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         .inner;
 
     composer::floating(ui, app, Some(session_id.clone()), false, area_rect);
+    app.md.scale = 1.0;
 
     let dock = dock_metrics(ui.ctx(), &session_id, area_rect);
     scroll_pill(ui.ctx(), app, &p, &session_id, dock, outcome.away);
     status_chip(ui.ctx(), app, &p, &session_id, dock, outcome.away);
+}
+
+#[derive(Clone)]
+struct MessageActionSlot {
+    actions: Vec<(String, String, String)>,
+    sender: rchamber_app::ActionSink,
+}
+
+fn message_actions(app: &RustChamber) -> MessageActionSlot {
+    let actions = app
+        .model
+        .extensions
+        .installed
+        .iter()
+        .filter(|extension| extension.is_active())
+        .flat_map(|extension| {
+            let id = extension.manifest.id.clone();
+            extension
+                .manifest
+                .contributes
+                .actions
+                .iter()
+                .filter(|action| {
+                    action.target == "message"
+                        && (action.roles.is_empty()
+                            || action.roles.iter().any(|role| role == "assistant"))
+                })
+                .map(move |action| (id.clone(), action.id.clone(), action.label.clone()))
+        })
+        .collect();
+    MessageActionSlot {
+        actions,
+        sender: app.backend.sink(),
+    }
+}
+
+fn set_message_actions(ctx: &egui::Context, slot: MessageActionSlot) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("message-actions"), slot));
+}
+
+fn assistant_text(assistant: &AssistantMessage) -> String {
+    let mut text = String::new();
+    for part in &assistant.content {
+        let Part::Text(part) = part else {
+            continue;
+        };
+        if part.text.trim().is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&part.text);
+    }
+    text
+}
+
+fn block_host(app: &RustChamber, session_id: &str) -> crate::blocks::BlockHost {
+    use std::sync::Arc;
+    let actions = app.backend.actions.clone();
+    let send_actions = actions.clone();
+    let send_session = session_id.to_string();
+    let tree_blocks = app.model.extensions.blocks.clone();
+    let tree_actions = actions.clone();
+    crate::blocks::BlockHost {
+        submit: Some(Arc::new(move |response: rchamber_ext::BlockResponse| {
+            let text = response.summary();
+            if text.trim().is_empty() {
+                return;
+            }
+            let _ = send_actions.send(rchamber_app::Action::Send {
+                session_id: send_session.clone(),
+                text,
+                files: Vec::new(),
+                delivery: "steer".into(),
+            });
+        })),
+        request: Some(Arc::new(move |name: &str, args: &[String]| {
+            let _ = tree_actions.send(rchamber_app::Action::ExtensionBlock {
+                name: name.to_string(),
+                args: args.to_vec(),
+            });
+        })),
+        tree: Some(Arc::new(move |name: &str, args: &[String]| {
+            let key = format!("{name}:{}", args.join("\u{1f}"));
+            tree_blocks.get(&key).cloned()
+        })),
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1166,9 +1261,54 @@ fn fold_header(
     response
 }
 
+fn user_markdown(ui: &mut Ui, md: &mut Markdown, text: &str, id: Id, p: &Palette, long: bool) {
+    let mut show = |ui: &mut Ui| {
+        md.show_at_sized(ui, id, text, TEXT_USER, theme::LINE_USER, p.fg, p);
+    };
+    if long {
+        ScrollArea::vertical()
+            .id_salt(id.with("scroll"))
+            .max_height(360.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width().max(40.0));
+                show(ui);
+            });
+    } else {
+        show(ui);
+    }
+}
+
+fn linkify_session_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("ses_") {
+        out.push_str(&rest[..start]);
+        let candidate = &rest[start..];
+        let end = candidate
+            .char_indices()
+            .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_'))
+            .map(|(index, _)| index)
+            .unwrap_or(candidate.len());
+        let id = &candidate[..end];
+        if id.len() > 4 {
+            out.push_str(&format!("[{id}](rchamber://session/{id})"));
+            rest = &candidate[end..];
+        } else {
+            out.push_str("ses_");
+            rest = &candidate[4..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> Rect {
     ui.add_space(16.0);
+    let linked_text = linkify_session_ids(&user.text);
+    let long = user.text.chars().count() > 4_000 || user.text.lines().count() > 40;
     let max = (ui.available_width() * USER_BUBBLE_MAX).max(120.0);
+    let inner_width = (max - 2.0 * USER_PAD_X - 2.0).max(40.0);
     let frame = egui::Frame::new()
         .fill(p.user_bg)
         .stroke(Stroke::new(theme::BORDER, p.alpha(p.primary, 13)))
@@ -1189,17 +1329,20 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
             frame
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
-                    ui.set_max_width((max - 2.0 * USER_PAD_X - 2.0).max(40.0));
+                    if long {
+                        ui.set_width(inner_width);
+                    } else {
+                        ui.set_max_width(inner_width);
+                    }
                     if user.files.is_empty() {
                         if !user.text.is_empty() {
-                            md.show_at_sized(
+                            user_markdown(
                                 ui,
+                                md,
+                                &linked_text,
                                 Id::unique(("user-text", user.id.as_str())),
-                                &user.text,
-                                TEXT_USER,
-                                theme::LINE_USER,
-                                p.fg,
                                 p,
+                                long,
                             );
                         }
                     } else {
@@ -1213,14 +1356,13 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
                             });
                             ui.add_space(8.0);
                             if !user.text.is_empty() {
-                                md.show_at_sized(
+                                user_markdown(
                                     ui,
+                                    md,
+                                    &linked_text,
                                     Id::unique(("user-text", user.id.as_str())),
-                                    &user.text,
-                                    TEXT_USER,
-                                    theme::LINE_USER,
-                                    p.fg,
                                     p,
+                                    long,
                                 );
                             }
                         });
@@ -1457,6 +1599,116 @@ fn message_footer(
                 ui.ctx().copy_text(text);
             }
         }
+    }
+
+    if reveal > 0.001 {
+        let quote = Rect::from_min_size(
+            Pos2::new(row.right() - 4.0 - ACTION_SIZE * 3.0, row.top()),
+            Vec2::splat(ACTION_SIZE),
+        );
+        let response = ui.interact(quote, id.with("quote"), Sense::click());
+        crate::widgets::pointer(ui, &response);
+        if response.hovered() {
+            ui.painter().rect_filled(
+                quote,
+                CornerRadius::same(theme::radius::SM),
+                p.hover.gamma_multiply(reveal),
+            );
+        }
+        icons::paint(
+            ui,
+            Icon::CheckCheck,
+            Rect::from_center_size(quote.center(), Vec2::splat(ACTION_ICON)),
+            if response.hovered() {
+                p.fg.gamma_multiply(reveal)
+            } else {
+                p.fg_muted.gamma_multiply(reveal)
+            },
+        );
+        if response
+            .on_hover_text("Reply with a quote and \"Looks good\"")
+            .clicked()
+        {
+            let text = assistant_text(assistant);
+            let snippet: String = text.chars().take(280).collect();
+            let quoted = snippet
+                .lines()
+                .map(|line| format!("> {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::unique("rchamber-compose"),
+                    format!("{quoted}\n\nLooks good\n"),
+                )
+            });
+        }
+    }
+
+    let slot = ui
+        .ctx()
+        .data(|data| data.get_temp::<MessageActionSlot>(egui::Id::unique("message-actions")));
+    if let Some(slot) = slot
+        && !slot.actions.is_empty()
+        && reveal > 0.001
+    {
+        let more = Rect::from_min_size(
+            Pos2::new(row.right() - 4.0 - ACTION_SIZE * 2.0, row.top()),
+            Vec2::splat(ACTION_SIZE),
+        );
+        let response = ui.interact(more, id.with("more"), Sense::click());
+        crate::widgets::pointer(ui, &response);
+        if response.hovered() {
+            ui.painter().rect_filled(
+                more,
+                CornerRadius::same(theme::radius::SM),
+                p.hover.gamma_multiply(reveal),
+            );
+        }
+        icons::paint(
+            ui,
+            Icon::More,
+            Rect::from_center_size(more.center(), Vec2::splat(ACTION_ICON)),
+            if response.hovered() {
+                p.fg.gamma_multiply(reveal)
+            } else {
+                p.fg_muted.gamma_multiply(reveal)
+            },
+        );
+        let mut open = ui.memory(|memory| {
+            memory
+                .data
+                .get_temp::<bool>(id.with("open"))
+                .unwrap_or(false)
+        });
+        if response.clicked() {
+            open = !open;
+        }
+        let text = assistant_text(assistant);
+        crate::app::menu_popup(
+            ui.ctx(),
+            &response,
+            id.with("menu"),
+            &mut open,
+            p,
+            6.0,
+            |ui, _| {
+                for (extension_id, action_id, label) in &slot.actions {
+                    if crate::widgets::menu_item(ui, label, Some(Icon::Puzzle), None, p).clicked() {
+                        slot.sender.send(rchamber_app::Action::ExtensionAction {
+                            id: extension_id.clone(),
+                            action: action_id.clone(),
+                            item: serde_json::json!({
+                                "kind": "message",
+                                "role": "assistant",
+                                "text": text,
+                            }),
+                        });
+                    }
+                }
+            },
+        );
+        ui.memory_mut(|memory| memory.data.insert_temp(id.with("open"), open));
     }
 
     if assistant.finish.as_deref() == Some("stop") {
@@ -2149,6 +2401,175 @@ fn tool_visible(tool: &ToolPart) -> bool {
     }
 }
 
+#[derive(Clone, Default)]
+struct ToolRenderers(Vec<ToolRenderer>);
+
+fn tool_renderers(app: &RustChamber) -> ToolRenderers {
+    ToolRenderers(
+        app.model
+            .extensions
+            .installed
+            .iter()
+            .filter(|extension| extension.is_active())
+            .flat_map(|extension| extension.manifest.contributes.tools.iter().cloned())
+            .collect(),
+    )
+}
+
+fn set_tool_renderers(ctx: &egui::Context, renderers: ToolRenderers) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("tool-renderers"), renderers));
+}
+
+fn tool_renderer(ctx: &egui::Context, name: &str) -> Option<ToolRenderer> {
+    let renderers = ctx
+        .data(|data| data.get_temp::<ToolRenderers>(egui::Id::unique("tool-renderers")))
+        .unwrap_or_default();
+    renderers.0.into_iter().find(|renderer| {
+        if let Some(prefix) = renderer.matcher.strip_suffix('*') {
+            name.starts_with(prefix)
+        } else {
+            renderer.matcher == name
+        }
+    })
+}
+
+fn render_template(template: &str, tool: &ToolPart) -> String {
+    let input = match &tool.state {
+        ToolState::Running(state) => Some(&state.input),
+        ToolState::Completed(state) => Some(&state.input),
+        ToolState::Error(state) => Some(&state.input),
+        ToolState::Streaming(_) | ToolState::Unknown => None,
+    };
+    let metadata = match &tool.state {
+        ToolState::Running(state) => state.metadata.as_ref(),
+        ToolState::Completed(state) => state.metadata.as_ref(),
+        ToolState::Error(state) => state.metadata.as_ref(),
+        ToolState::Streaming(_) | ToolState::Unknown => None,
+    };
+    let output = tool.state.output_text();
+    let output = serde_json::from_str::<serde_json::Value>(&output).ok();
+    let mut text = template.to_string();
+    for (kind, value) in [
+        ("input", input),
+        ("output", output.as_ref()),
+        ("metadata", metadata),
+    ] {
+        let mut cursor = 0;
+        while let Some(start) = text[cursor..].find(&format!("{{{kind}.")) {
+            let start = cursor + start;
+            let Some(end) = text[start..].find('}') else {
+                break;
+            };
+            let end = start + end;
+            let path = &text[start + kind.len() + 2..end];
+            let replacement = value
+                .and_then(|value| json_path(value, path))
+                .map(|value| match value {
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            text.replace_range(start..=end, &replacement);
+            cursor = start + replacement.len();
+        }
+    }
+    text
+}
+
+fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+fn render_tool_output(renderer: Option<&ToolRenderer>, output: &str) -> Option<String> {
+    let renderer = renderer?;
+    match renderer.output.as_deref() {
+        Some("table") => {
+            let value = serde_json::from_str::<serde_json::Value>(output).ok()?;
+            let items = value
+                .as_array()
+                .cloned()
+                .or_else(|| {
+                    value
+                        .get("items")
+                        .and_then(|items| items.as_array())
+                        .cloned()
+                })
+                .unwrap_or_default();
+            let columns = if renderer.columns.is_empty() {
+                items
+                    .first()
+                    .and_then(|item| item.as_object())
+                    .map(|object| object.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            } else {
+                renderer.columns.clone()
+            };
+            if columns.is_empty() {
+                return None;
+            }
+            let mut text = String::new();
+            text.push_str("| ");
+            text.push_str(&columns.join(" | "));
+            text.push_str(" |\n| ");
+            text.push_str(
+                &columns
+                    .iter()
+                    .map(|_| "---")
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            );
+            text.push_str(" |\n");
+            for item in items.iter().take(50) {
+                text.push_str("| ");
+                for column in &columns {
+                    let cell = item
+                        .get(column)
+                        .map(|value| match value {
+                            serde_json::Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_default();
+                    text.push_str(&cell.replace('|', "\\|"));
+                    text.push_str(" | ");
+                }
+                text.push('\n');
+            }
+            Some(text)
+        }
+        Some("json") => {
+            let value = serde_json::from_str::<serde_json::Value>(output).ok()?;
+            Some(format!(
+                "```json\n{}\n```",
+                serde_json::to_string_pretty(&value).ok()?
+            ))
+        }
+        Some("code") => Some(format!(
+            "```{}\n{}\n```",
+            renderer.language.as_deref().unwrap_or(""),
+            output
+        )),
+        _ => None,
+    }
+}
+
+fn extension_icon(name: &str) -> Icon {
+    match name {
+        "rocket" | "spark" | "sparkles" => Icon::Spark,
+        "git-merge" | "git-branch" | "branch" => Icon::Branch,
+        "check" | "checkbox-circle" | "check-circle" => Icon::CircleCheck,
+        "window" | "panel-right" | "layout-right" => Icon::PanelRight,
+        "file" | "file-text" => Icon::File,
+        "terminal" | "command" => Icon::Terminal,
+        "time" | "clock" => Icon::Clock,
+        "chart" | "bar-chart" => Icon::ChartBar,
+        _ => Icon::Puzzle,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolStatus {
     Pending,
@@ -2182,6 +2603,7 @@ fn tool_row(
     let status = tool_status(&tool.state);
     let error = status == ToolStatus::Error;
     let running = matches!(status, ToolStatus::Running | ToolStatus::Pending);
+    let renderer = tool_renderer(ui.ctx(), &tool.name);
 
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), row_height_of(ui)),
@@ -2200,7 +2622,11 @@ fn tool_row(
     if hover < 0.999 {
         icons::paint(
             ui,
-            tool_icon(&tool.name),
+            renderer
+                .as_ref()
+                .and_then(|renderer| renderer.icon.as_deref())
+                .map(extension_icon)
+                .unwrap_or_else(|| tool_icon(&tool.name)),
             icon_rect,
             icon_color.gamma_multiply(1.0 - hover),
         );
@@ -2219,12 +2645,16 @@ fn tool_row(
     }
 
     let title_color = if error { p.red } else { p.tool_title };
-    let title = tool_label(&tool.name);
-    let title_galley = ui.painter().layout_no_wrap(
-        title.to_string(),
-        theme::font_medium(ROW_TITLE),
-        title_color,
-    );
+    let title = renderer
+        .as_ref()
+        .and_then(|renderer| renderer.title.as_deref())
+        .map(|template| render_template(template, tool))
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| renderer.as_ref().and_then(|renderer| renderer.name.clone()))
+        .unwrap_or_else(|| tool_label(&tool.name).to_string());
+    let title_galley =
+        ui.painter()
+            .layout_no_wrap(title, theme::font_medium(ROW_TITLE), title_color);
     let mut x = icon_rect.right() + ROW_GAP;
     let title_width = title_galley.size().x.min(rect.width() * 0.45);
     ui.painter().galley(
@@ -2279,7 +2709,7 @@ fn tool_row(
         right -= ROW_GAP;
     }
 
-    let description = tool_description(tool, error);
+    let description = tool_description(tool, error, renderer.as_ref());
     let start = x + ROW_GAP;
     if !description.is_empty() && right > start {
         let galley = row_galley(
@@ -2307,7 +2737,7 @@ fn tool_row(
     }
 
     if open {
-        tool_body(ui, p, md, tool, id);
+        tool_body(ui, p, md, tool, id, renderer.as_ref());
     }
     if running {
         ui.ctx().request_repaint_after(Duration::from_millis(1000));
@@ -2315,7 +2745,15 @@ fn tool_row(
     rect
 }
 
-fn tool_description(tool: &ToolPart, error: bool) -> String {
+fn tool_description(tool: &ToolPart, error: bool, renderer: Option<&ToolRenderer>) -> String {
+    if let Some(renderer) = renderer
+        && let Some(subtitle) = &renderer.subtitle
+    {
+        let text = render_template(subtitle, tool);
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
     if error
         && let ToolState::Error(state) = &tool.state
         && let Some(error) = &state.error
@@ -2333,11 +2771,27 @@ fn tool_description(tool: &ToolPart, error: bool) -> String {
     String::new()
 }
 
-fn tool_body(ui: &mut Ui, p: &Palette, md: &mut Markdown, tool: &ToolPart, id: Id) {
+fn tool_body(
+    ui: &mut Ui,
+    p: &Palette,
+    md: &mut Markdown,
+    tool: &ToolPart,
+    id: Id,
+    renderer: Option<&ToolRenderer>,
+) {
     let output = tool.state.output_text();
     let input = tool_input_text(tool);
     let patches = tool_patches(tool);
     let shell = matches!(tool.name.as_str(), "bash" | "shell" | "cmd" | "terminal");
+    if renderer.is_some()
+        && !output.trim().is_empty()
+        && patches.is_empty()
+        && let Some(rendered) = render_tool_output(renderer, &output)
+    {
+        tool_output(ui, p, md, &rendered, id.with("output"));
+        ui.add_space(2.0);
+        return;
+    }
 
     ui.add_space(2.0);
     if !patches.is_empty() {
@@ -3680,5 +4134,45 @@ mod tests {
         let summary = summarize(&turn);
         assert_eq!(summary.commands, 1);
         assert!(fold_label(&summary).contains("Ran 1 command"));
+    }
+
+    #[test]
+    fn session_ids_become_deep_links() {
+        assert_eq!(
+            linkify_session_ids("see ses_abc123 now"),
+            "see [ses_abc123](rchamber://session/ses_abc123) now"
+        );
+        assert_eq!(linkify_session_ids("no id"), "no id");
+    }
+
+    fn tool_renderer(name: &str, output: &str, columns: &[&str]) -> ToolRenderer {
+        ToolRenderer {
+            matcher: name.into(),
+            name: Some("Deploys".into()),
+            icon: Some("rocket".into()),
+            title: Some("{input.service}".into()),
+            subtitle: Some("deploy".into()),
+            output: Some(output.into()),
+            language: None,
+            columns: columns.iter().map(|column| column.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn renders_declared_tool_titles_and_tables() {
+        let tool: ToolPart = serde_json::from_value(serde_json::json!({
+            "id": "t",
+            "name": "mcp.deploys.status",
+            "state": {
+                "status": "completed",
+                "input": {"service": "api"},
+                "content": [{"type": "text", "text": "[{\"service\":\"api\",\"state\":\"running\"}]"}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(render_template("{input.service}", &tool), "api");
+        let renderer = tool_renderer("mcp.deploys.*", "table", &["service", "state"]);
+        let table = render_tool_output(Some(&renderer), &tool.state.output_text()).unwrap();
+        assert!(table.contains("| api | running |"));
     }
 }

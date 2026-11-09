@@ -2,11 +2,43 @@ use rchamber_ui::RustChamber;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> eframe::Result<()> {
-    if std::env::args()
-        .nth(1)
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
         .is_some_and(|arg| arg == "--version" || arg == "-V")
     {
         println!("RustChamber {}", app_version());
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|arg| arg == "ext") && args.get(2).is_some_and(|arg| arg == "check")
+    {
+        let Some(path) = args.get(3) else {
+            eprintln!("usage: rchamber ext check <folder>");
+            std::process::exit(2);
+        };
+        match rchamber_ext::check_package(std::path::Path::new(path)) {
+            Ok(report) => {
+                println!("{} {} ({})", report.name, report.version, report.id);
+                if report.capabilities.is_empty() {
+                    println!("permissions: none");
+                } else {
+                    println!("permissions: {}", report.capabilities.join(", "));
+                }
+                if report.methods.is_empty() {
+                    println!("methods: none");
+                } else {
+                    println!("methods: {}", report.methods.join(", "));
+                }
+                for warning in report.warnings {
+                    println!("warning: {warning}");
+                }
+                println!("ready");
+            }
+            Err(error) => {
+                eprintln!("invalid extension: {error}");
+                std::process::exit(1);
+            }
+        }
         return Ok(());
     }
 

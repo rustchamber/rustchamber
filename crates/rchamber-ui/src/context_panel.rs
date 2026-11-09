@@ -27,7 +27,14 @@ const OPEN_APPS: [&str; 6] = ["Finder", "Terminal", "iTerm2", "Cursor", "Zed", "
 const OPEN_APPS: [&str; 5] = ["File manager", "Terminal", "VS Code", "Cursor", "Zed"];
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const OPEN_APPS: [&str; 5] = ["Explorer", "Terminal", "VS Code", "Cursor", "Zed"];
-const SECTION_KEYS: [&str; 4] = ["turn-stats", "subagents", "mcp", "sources"];
+const SECTION_KEYS: [&str; 6] = [
+    "turn-stats",
+    "session-totals",
+    "subagents",
+    "mcp",
+    "sources",
+    "extensions",
+];
 const MAX_SUBAGENTS: usize = 8;
 const USAGE_NOTE: &str = "Not reported by this server";
 const EMPTY_MCP: &str = "No MCP servers configured";
@@ -197,11 +204,15 @@ fn body(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
                     ui.add_space(SECTION_GAP);
                     turn_section(ui, p, app);
                     ui.add_space(SECTION_GAP);
+                    session_totals_section(ui, p, app);
+                    ui.add_space(SECTION_GAP);
                     subagents_section(ui, p, app);
                     ui.add_space(SECTION_GAP);
                     mcp_section(ui, p, app);
                     ui.add_space(SECTION_GAP);
                     sources_section(ui, p, app);
+                    ui.add_space(SECTION_GAP);
+                    extensions_section(ui, p, app);
                 });
         });
 }
@@ -632,7 +643,7 @@ fn turn_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
         return;
     };
     let metrics = turn_metrics(chat, &app.model);
-    let summary = speed_text(metrics.response_speed.or(metrics.request_speed));
+    let summary = speed_text(metrics.response_speed);
     let open = collapsible(ui, p, "turn-stats", "Turn stats", &summary);
     if !open {
         return;
@@ -668,6 +679,82 @@ fn tokens_text(tokens: &TokenUsage) -> String {
         compact_number(tokens.input),
         compact_number(tokens.output + tokens.reasoning)
     )
+}
+
+fn session_totals_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
+    let Some(chat) = &app.model.active else {
+        return;
+    };
+    let metrics = session_totals(chat);
+    let summary = speed_text(metrics.response_speed);
+    let open = collapsible(ui, p, "session-totals", "Session totals", &summary);
+    if !open {
+        return;
+    }
+    for (label, value) in [
+        ("Requests", metrics.requests.to_string()),
+        ("Input", compact_number(metrics.tokens.input)),
+        ("Output", compact_number(metrics.tokens.output)),
+        ("Reasoning", compact_number(metrics.tokens.reasoning)),
+        ("Cache read", compact_number(metrics.tokens.cache.read)),
+        ("Cache write", compact_number(metrics.tokens.cache.write)),
+        (
+            "Cache hit",
+            metrics
+                .cache_hit
+                .map(|hit| format!("{:.0}%", hit * 100.0))
+                .unwrap_or_else(|| "—".into()),
+        ),
+        ("Cost", money(metrics.cost)),
+    ] {
+        row(ui, p, None, label, &value, RowTone::Metric);
+    }
+}
+
+#[derive(Default)]
+struct SessionTotals {
+    tokens: TokenUsage,
+    cache_hit: Option<f64>,
+    cost: f64,
+    requests: usize,
+    response_speed: Option<f64>,
+}
+
+fn session_totals(chat: &Chat) -> SessionTotals {
+    let mut totals = SessionTotals::default();
+    let mut output_ms = 0.0;
+    for message in &chat.messages {
+        let Message::Assistant(assistant) = message else {
+            continue;
+        };
+        totals.requests += 1;
+        totals.cost += assistant.cost;
+        if let Some(tokens) = &assistant.tokens {
+            totals.tokens.input += tokens.input;
+            totals.tokens.output += tokens.output;
+            totals.tokens.reasoning += tokens.reasoning;
+            totals.tokens.cache.read += tokens.cache.read;
+            totals.tokens.cache.write += tokens.cache.write;
+        }
+        if let Some(completed) = assistant.time.completed {
+            let elapsed = completed - assistant.time.created;
+            if elapsed > 0.0 {
+                output_ms += elapsed;
+            }
+        }
+    }
+    totals.cache_hit = hit_rate(
+        totals.tokens.input,
+        totals.tokens.cache.read,
+        totals.tokens.cache.write,
+    );
+    if output_ms > 0.0 {
+        let tokens = totals.tokens.output + totals.tokens.reasoning;
+        if tokens > 0.0 {
+            totals.response_speed = Some(tokens / (output_ms / 1000.0));
+        }
+    }
+    totals
 }
 
 fn subagents_section(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
@@ -860,6 +947,91 @@ fn sources_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
         &snippets.to_string(),
         RowTone::Metric,
     );
+}
+
+fn extensions_section(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+    let active: Vec<rchamber_ext::InstalledExtension> = app
+        .model
+        .extensions
+        .installed
+        .iter()
+        .filter(|extension| {
+            extension.is_active() && extension.manifest.contributes.status_section.is_some()
+        })
+        .cloned()
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+    let summary = active.len().to_string();
+    let open = collapsible(ui, p, "extensions", "Extensions", &summary);
+    if !open {
+        return;
+    }
+    for extension in active {
+        let id = extension.manifest.id.clone();
+        let title = extension
+            .manifest
+            .contributes
+            .status_section
+            .as_ref()
+            .map(|status| status.title.clone())
+            .unwrap_or_else(|| extension.manifest.name.clone());
+        let requested = ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::unique(("ext-status-requested", id.as_str())))
+                .unwrap_or(false)
+        });
+        if !requested {
+            app.backend.send(Action::ExtensionCall {
+                id: id.clone(),
+                call_id: "status".into(),
+                method: extension
+                    .manifest
+                    .contributes
+                    .status_section
+                    .as_ref()
+                    .map(|status| status.method.clone())
+                    .unwrap_or_else(|| "status".into()),
+                args: Vec::new(),
+            });
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::unique(("ext-status-requested", id.as_str())),
+                    true,
+                )
+            });
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(title)
+                .font(theme::font_medium(theme::TEXT_META))
+                .color(p.fg_muted),
+        );
+        ui.add_space(4.0);
+        let host = crate::extension_panel::host_for(app, &id);
+        crate::blocks::set_host(ui.ctx(), host);
+        if let Some(widgets) = app.model.extensions.status.get(&id).cloned() {
+            crate::blocks::show_widgets(ui, &widgets, p, theme::TEXT_META);
+        } else if let Some(error) = app
+            .model
+            .extensions
+            .errors
+            .get(&id)
+            .map(|error| &error.message)
+        {
+            ui.label(
+                RichText::new(error)
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.red),
+            );
+        } else {
+            ui.label(
+                RichText::new("Loading…")
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.fg_faint),
+            );
+        }
+    }
 }
 
 fn section_default(key: &str) -> bool {

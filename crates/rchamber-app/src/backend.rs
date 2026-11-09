@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rchamber_api::PromptFile;
 use rchamber_api::models::{Message, Part, Session};
 use rchamber_api::process::LaunchOptions;
 use rchamber_api::{ApiError, Client, RawEvent, ServerHandle};
@@ -13,15 +14,72 @@ use crate::action::{
     Action, BackendEvent, Connection, ExecutionState, LaunchConfig, LiveEvent, ToastKind,
     TrackedProject,
 };
+use crate::extensions::{BridgeMessage, ExtensionHost};
 use crate::live;
 use crate::snippets;
 use crate::workspace::paths_match;
+use rchamber_ext::{HostCall, HostContext, SessionContext};
+use serde_json::json;
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 const MCP_SETTLE_ATTEMPTS: u32 = 8;
 const MCP_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const SESSIONS_PER_PROJECT: u32 = 100;
+
+fn confine_extension_path(
+    base: &std::path::Path,
+    value: &str,
+) -> Result<std::path::PathBuf, String> {
+    let base = std::fs::canonicalize(base).map_err(|error| error.to_string())?;
+    let requested = std::path::Path::new(value);
+    let path = if requested.is_absolute() {
+        std::path::PathBuf::from(value)
+    } else {
+        if requested
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err("the path is outside the open project".into());
+        }
+        base.join(requested)
+    };
+    if let Ok(canonical) = std::fs::canonicalize(&path) {
+        if !canonical.starts_with(&base) {
+            return Err("the path is outside the open project".into());
+        }
+        return Ok(canonical);
+    }
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err("the path is a symbolic link".into());
+    }
+    let parent = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .ok_or_else(|| "the parent folder does not exist".to_string())?;
+    if !parent.starts_with(&base) {
+        return Err("the path is outside the open project".into());
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| "the path has no file name".to_string())?;
+    Ok(parent.join(name))
+}
+
+fn sanitize_prompt_fragment(value: &str) -> String {
+    value.replace("</RustChamber", "< /RustChamber")
+}
+
+const UI_BLOCK_GUIDANCE: &str = "RustChamber draws native UI blocks. When a table, chart, form or status reads better than prose, end the answer with a fenced ```openui-lang block containing a program such as:\nroot = Stack([title, rows])\ntitle = Text(\"Deploys\")\nrows = Table([\"Service\", \"State\"], [[\"api\", \"running\"]])\nUse positional arguments only. Components: Stack, Row, Card, Tabs, Text, Heading, Code, Badge, Callout, KeyValue, Table, List, Steps, Stat, Progress, BarChart, LineChart, Choice, Input, DateInput, Slider, Details, Divider, Button. A Choice or Input asks the user and the answer comes back as a message.";
+
+#[derive(Clone)]
+pub struct ActionSink(UnboundedSender<Action>);
+
+impl ActionSink {
+    pub fn send(&self, action: Action) {
+        let _ = self.0.send(action);
+    }
+}
 
 pub struct Backend {
     pub actions: UnboundedSender<Action>,
@@ -62,6 +120,10 @@ impl Backend {
     pub fn send(&self, action: Action) {
         let _ = self.actions.send(action);
     }
+
+    pub fn sink(&self) -> ActionSink {
+        ActionSink(self.actions.clone())
+    }
 }
 
 struct Inner {
@@ -83,6 +145,11 @@ struct Inner {
     tracked: Vec<TrackedProject>,
     cached_sessions: HashMap<String, Vec<Session>>,
     next_flush: Option<Instant>,
+    extensions: ExtensionHost,
+    next_extension_status: Option<Instant>,
+    extension_status_due: HashMap<String, Instant>,
+    extension_theme: String,
+    extension_locale: String,
 }
 
 enum Control {
@@ -112,10 +179,25 @@ impl Inner {
             tracked: Vec::new(),
             cached_sessions: HashMap::new(),
             next_flush: None,
+            extensions: {
+                let mut extensions = ExtensionHost::new(rchamber_ext::default_root());
+                extensions.set_context(HostContext {
+                    theme: "dark".into(),
+                    locale: "en".into(),
+                    ..HostContext::default()
+                });
+                extensions.ensure_workers();
+                extensions
+            },
+            next_extension_status: Some(Instant::now() + Duration::from_millis(1_200)),
+            extension_status_due: HashMap::new(),
+            extension_theme: "dark".into(),
+            extension_locale: "en".into(),
         }
     }
 
     async fn run(&mut self, mut actions: UnboundedReceiver<Action>) {
+        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
         loop {
             self.connect().await;
             let mut sub = self.subscription.take();
@@ -149,6 +231,17 @@ impl Inner {
                     _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                         self.flush().await;
                     }
+                    Some(event) = self.extensions.events.recv() => {
+                        if let Some(event) = self.extensions.worker_event(event) {
+                            self.emit(event);
+                        }
+                    }
+                    Some(message) = self.extensions.bridge_rx.recv() => {
+                        self.extension_bridge(message).await;
+                    }
+                    _ = tokio::time::sleep_until(self.next_extension_status.unwrap_or_else(Instant::now)), if self.next_extension_status.is_some() => {
+                        self.refresh_extension_status();
+                    }
                 }
             }
             if let Some(sub) = sub.take() {
@@ -174,6 +267,10 @@ impl Inner {
                 self.client = Some(handle.client.clone());
                 self.server = Some(handle);
                 self.emit(BackendEvent::Connection(Connection::Ready));
+                self.sync_extension_context();
+                self.extensions.ensure_workers();
+                self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                self.refresh_extension_status();
                 if let Some(server) = &self.server {
                     self.emit(BackendEvent::Server(Box::new(server.info.clone())));
                 }
@@ -290,10 +387,14 @@ impl Inner {
             self.cached_sessions
                 .retain(|directory, _| directories.contains(directory.as_str()));
             self.tracked = projects.clone();
+            self.sync_extension_context();
             if let Some(client) = self.client.clone() {
                 self.refresh_sessions(&client).await;
             }
             return Control::Continue;
+        }
+        if let Some(control) = self.handle_extension_action(&action).await {
+            return control;
         }
         let Some(client) = self.client.clone() else {
             match action {
@@ -618,6 +719,19 @@ impl Inner {
                 Ok(entries) => self.emit(BackendEvent::FileSearch { query, entries }),
                 Err(err) => self.error("Could not search files", err),
             },
+            Action::InstallExtension { .. }
+            | Action::InstallExtensionUrl { .. }
+            | Action::ApproveExtension { .. }
+            | Action::SetExtensionEnabled { .. }
+            | Action::RemoveExtension(_)
+            | Action::ReloadExtension(_)
+            | Action::ExtensionCall { .. }
+            | Action::ExtensionMentions { .. }
+            | Action::ExtensionBlock { .. }
+            | Action::ExtensionCommand { .. }
+            | Action::ExtensionAction { .. }
+            | Action::ExtensionStatusRefresh
+            | Action::SetExtensionAppearance { .. } => {}
             Action::Configure {
                 endpoint,
                 password,
@@ -634,12 +748,700 @@ impl Inner {
         Control::Continue
     }
 
+    async fn handle_extension_action(&mut self, action: &Action) -> Option<Control> {
+        match action {
+            Action::InstallExtension { path } => {
+                let path = std::path::PathBuf::from(path);
+                let result = if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                {
+                    self.extensions.install_zip(&path)
+                } else {
+                    self.extensions.install_path(&path)
+                };
+                match result {
+                    Ok(extension) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.emit(BackendEvent::ExtensionInstalled {
+                            extension_id: extension.manifest.id.clone(),
+                        });
+                        self.emit(BackendEvent::Toast {
+                            kind: ToastKind::Success,
+                            message: format!(
+                                "Added {}. Review its permissions to turn it on.",
+                                extension.manifest.name
+                            ),
+                        });
+                        self.sync_extension_context();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: format!("Could not add the extension: {error}"),
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::InstallExtensionUrl { url } => {
+                match self.install_extension_from_url(url).await {
+                    Ok(extension) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.emit(BackendEvent::ExtensionInstalled {
+                            extension_id: extension.manifest.id.clone(),
+                        });
+                        self.emit(BackendEvent::Toast {
+                            kind: ToastKind::Success,
+                            message: format!(
+                                "Added {}. Review its permissions to turn it on.",
+                                extension.manifest.name
+                            ),
+                        });
+                        self.sync_extension_context();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: format!("Could not add the extension: {error}"),
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::ApproveExtension { id, grants } => {
+                match self.extensions.approve(id, grants.clone()) {
+                    Ok(()) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.sync_extension_context();
+                        self.refresh_extension_status();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: error,
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::SetExtensionEnabled { id, enabled } => {
+                match self.extensions.set_enabled(id, *enabled) {
+                    Ok(()) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.sync_extension_context();
+                        self.refresh_extension_status();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: error,
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::RemoveExtension(id) => {
+                match self.extensions.remove(id) {
+                    Ok(()) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.emit(BackendEvent::Toast {
+                            kind: ToastKind::Info,
+                            message: "Extension removed".into(),
+                        });
+                        self.sync_extension_context();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: error,
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::ReloadExtension(id) => {
+                match self.extensions.reload(id) {
+                    Ok(()) => {
+                        self.emit(BackendEvent::Extensions(self.extensions.catalog()));
+                        self.sync_extension_context();
+                        self.refresh_extension_status();
+                    }
+                    Err(error) => self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Error,
+                        message: error,
+                    }),
+                }
+                Some(Control::Continue)
+            }
+            Action::ExtensionCall {
+                id,
+                call_id,
+                method,
+                args,
+            } => {
+                self.sync_extension_context();
+                if !self.extensions.call(id, call_id, method, args.clone()) {
+                    self.emit(BackendEvent::ExtensionError {
+                        call_id: call_id.clone(),
+                        extension_id: id.clone(),
+                        method: method.clone(),
+                        message: "the extension is not running".into(),
+                    });
+                }
+                Some(Control::Continue)
+            }
+            Action::ExtensionMentions { query } => {
+                self.sync_extension_context();
+                self.extensions.request_mentions(query);
+                Some(Control::Continue)
+            }
+            Action::ExtensionBlock { name, args } => {
+                self.sync_extension_context();
+                let _ = self.extensions.request_block(name, args);
+                Some(Control::Continue)
+            }
+            Action::ExtensionCommand { id, name, args } => {
+                self.sync_extension_context();
+                self.extensions.call(
+                    id,
+                    &format!("command:{name}"),
+                    "command",
+                    vec![json!(name), json!(args)],
+                );
+                Some(Control::Continue)
+            }
+            Action::ExtensionAction { id, action, item } => {
+                self.sync_extension_context();
+                self.extensions.call(
+                    id,
+                    &format!("action:{action}"),
+                    "action",
+                    vec![json!(action), item.clone()],
+                );
+                Some(Control::Continue)
+            }
+            Action::ExtensionStatusRefresh => {
+                self.refresh_extension_status();
+                Some(Control::Continue)
+            }
+            Action::SetExtensionAppearance { theme, locale } => {
+                self.extension_theme = theme.clone();
+                self.extension_locale = locale.clone();
+                self.sync_extension_context();
+                Some(Control::Continue)
+            }
+            _ => None,
+        }
+    }
+
+    async fn install_extension_from_url(
+        &mut self,
+        url: &str,
+    ) -> Result<rchamber_ext::InstalledExtension, String> {
+        let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
+        if parsed.scheme() != "https" {
+            return Err("extension downloads must use https".into());
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("the server answered {}", response.status()));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > 40 * 1024 * 1024)
+        {
+            return Err("the archive is larger than 40 MiB".into());
+        }
+        let path = std::env::temp_dir().join(format!(
+            "rchamber-extension-{}-{}.zip",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut written = 0usize;
+        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            written = written.saturating_add(chunk.len());
+            if written > 40 * 1024 * 1024 {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err("the archive is larger than 40 MiB".into());
+            }
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        tokio::io::AsyncWriteExt::flush(&mut file)
+            .await
+            .map_err(|error| error.to_string())?;
+        drop(file);
+        let result = self.extensions.install_zip(&path);
+        let _ = tokio::fs::remove_file(&path).await;
+        result
+    }
+
+    fn sync_extension_context(&mut self) {
+        let session = self.active.as_ref().and_then(|id| {
+            self.cached_sessions
+                .values()
+                .flatten()
+                .find(|session| &session.id == id)
+                .map(|session| SessionContext {
+                    id: session.id.clone(),
+                    title: session.title().to_string(),
+                    directory: session.directory().map(str::to_string),
+                })
+        });
+        self.extensions.set_context(HostContext {
+            project: self.config.workspace.clone(),
+            session,
+            theme: self.extension_theme.clone(),
+            locale: self.extension_locale.clone(),
+            workspace: self.config.workspace.clone(),
+        });
+        self.extensions.ensure_workers();
+    }
+
+    fn refresh_extension_status(&mut self) {
+        self.sync_extension_context();
+        let statuses = self.extensions.status_extensions();
+        let now = Instant::now();
+        self.extension_status_due
+            .retain(|id, _| statuses.iter().any(|(candidate, _, _)| candidate == id));
+        for (id, method, interval) in &statuses {
+            let due = self.extension_status_due.entry(id.clone()).or_insert(now);
+            if now >= *due {
+                self.extensions.call(id, "status", method, Vec::new());
+                *due = now + Duration::from_millis(*interval);
+            }
+        }
+        let next = self
+            .extension_status_due
+            .values()
+            .min()
+            .copied()
+            .unwrap_or(now + Duration::from_secs(30));
+        self.next_extension_status = Some(next.max(now + Duration::from_millis(250)));
+    }
+
+    async fn extension_bridge(&mut self, message: BridgeMessage) {
+        match message {
+            BridgeMessage::Call {
+                extension_id,
+                call,
+                reply,
+            } => {
+                let answer = if self.extensions.is_active(&extension_id) {
+                    self.host_call(&extension_id, call).await
+                } else {
+                    Err("the extension is no longer active".into())
+                };
+                let _ = reply.send(answer);
+            }
+            BridgeMessage::Effect {
+                extension_id,
+                effect,
+            } => {
+                if self.extensions.is_active(&extension_id) {
+                    self.host_effect(&extension_id, effect).await;
+                }
+            }
+        }
+    }
+
+    async fn host_call(
+        &mut self,
+        _extension_id: &str,
+        call: HostCall,
+    ) -> Result<serde_json::Value, String> {
+        match call {
+            HostCall::Http {
+                method,
+                url,
+                headers,
+                body,
+            } => {
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(20))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| error.to_string())?;
+                let method = reqwest::Method::from_bytes(method.as_bytes())
+                    .map_err(|error| error.to_string())?;
+                let mut request = client.request(method, &url);
+                for (name, value) in headers {
+                    request = request.header(name, value);
+                }
+                if let Some(body) = body {
+                    request = request.body(body);
+                }
+                let mut response = request.send().await.map_err(|error| error.to_string())?;
+                let status = response.status().as_u16();
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > 2 * 1024 * 1024)
+                {
+                    return Err("the response is larger than 2 MiB".into());
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+                    bytes.extend_from_slice(&chunk);
+                    if bytes.len() > 2 * 1024 * 1024 {
+                        return Err("the response is larger than 2 MiB".into());
+                    }
+                }
+                Ok(json!({
+                    "status": status,
+                    "body": String::from_utf8_lossy(&bytes),
+                }))
+            }
+            HostCall::ReadFile { path } => {
+                let path = self.extension_path(&path)?;
+                let mut file = tokio::fs::File::open(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut bytes = Vec::new();
+                tokio::io::AsyncReadExt::read_to_end(
+                    &mut tokio::io::AsyncReadExt::take(&mut file, 2 * 1024 * 1024 + 1),
+                    &mut bytes,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                if bytes.len() > 2 * 1024 * 1024 {
+                    return Err("the file is larger than 2 MiB".into());
+                }
+                Ok(json!({
+                    "content": String::from_utf8_lossy(&bytes),
+                    "path": path.to_string_lossy(),
+                }))
+            }
+            HostCall::WriteFile { path, content } => {
+                let path = self.extension_path(&path)?;
+                if content.len() > 1024 * 1024 {
+                    return Err("the content is larger than 1 MiB".into());
+                }
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                tokio::fs::write(&path, content)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({ "path": path.to_string_lossy() }))
+            }
+            HostCall::ListDir { path } => {
+                let path = self.extension_path(&path)?;
+                let mut entries = Vec::new();
+                let mut reader = tokio::fs::read_dir(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                while let Some(entry) = reader
+                    .next_entry()
+                    .await
+                    .map_err(|error| error.to_string())?
+                {
+                    if entries.len() >= 500 {
+                        break;
+                    }
+                    let kind = entry.file_type().await.ok().map(|kind| {
+                        if kind.is_dir() {
+                            "directory"
+                        } else if kind.is_file() {
+                            "file"
+                        } else {
+                            "other"
+                        }
+                    });
+                    entries.push(json!({
+                        "name": entry.file_name().to_string_lossy(),
+                        "kind": kind.unwrap_or("other"),
+                    }));
+                }
+                Ok(serde_json::Value::Array(entries))
+            }
+            HostCall::Stat { path } => {
+                let path = self.extension_path(&path)?;
+                match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => Ok(json!({
+                        "kind": if metadata.is_dir() { "directory" } else if metadata.is_file() { "file" } else { "other" },
+                        "size": metadata.len(),
+                    })),
+                    Err(_) => Ok(json!({ "kind": "missing" })),
+                }
+            }
+            HostCall::SessionsList => {
+                let Some(client) = self.client.clone() else {
+                    return Err("not connected to OpenCode".into());
+                };
+                let sessions = client
+                    .list_sessions(200)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(serde_json::Value::Array(
+                    sessions
+                        .into_iter()
+                        .map(|session| {
+                            json!({
+                                "id": session.id,
+                                "title": session.title(),
+                                "directory": session.directory(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
+            HostCall::SessionStart { project, title } => {
+                let Some(client) = self.client.clone() else {
+                    return Err("not connected to OpenCode".into());
+                };
+                let directory = project
+                    .or_else(|| self.config.workspace.clone())
+                    .ok_or_else(|| "no project is open".to_string())?;
+                if !self.tracked.is_empty()
+                    && !self
+                        .tracked
+                        .iter()
+                        .any(|tracked| paths_match(&tracked.directory, &directory))
+                {
+                    return Err("the project is not tracked by RustChamber".into());
+                }
+                let session = client
+                    .create_session(&directory, title.as_deref(), None, None, None)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                self.emit(BackendEvent::SessionUpsert(Box::new(session.clone())));
+                Ok(json!({
+                    "id": session.id,
+                    "title": session.title(),
+                }))
+            }
+            HostCall::SessionOpen { id } => {
+                self.emit(BackendEvent::ExtensionOpenSession(id));
+                Ok(json!({}))
+            }
+            HostCall::Prompt { session, text } => {
+                let Some(client) = self.client.clone() else {
+                    return Err("not connected to OpenCode".into());
+                };
+                let Some(session) = session.or_else(|| self.active.clone()) else {
+                    return Err("no session is open".into());
+                };
+                self.send_prompt(&client, &session, &text, &[], "steer")
+                    .await;
+                Ok(json!({}))
+            }
+            HostCall::Generate { .. } => {
+                Err("text generation with the small model is not available in this build".into())
+            }
+            HostCall::Exec { command, args, cwd } => {
+                let cwd = match cwd {
+                    Some(cwd) => self.extension_path(&cwd)?,
+                    None => std::path::PathBuf::from(
+                        self.config
+                            .workspace
+                            .clone()
+                            .ok_or_else(|| "no project is open".to_string())?,
+                    ),
+                };
+                let mut process = tokio::process::Command::new(&command);
+                process
+                    .args(&args)
+                    .current_dir(&cwd)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true);
+                let mut child = process.spawn().map_err(|error| error.to_string())?;
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+                let run = async {
+                    let read = |pipe: Option<tokio::process::ChildStdout>, limit: usize| async move {
+                        let Some(mut pipe) = pipe else {
+                            return Ok::<Vec<u8>, String>(Vec::new());
+                        };
+                        let mut bytes = Vec::new();
+                        tokio::io::AsyncReadExt::read_to_end(
+                            &mut tokio::io::AsyncReadExt::take(&mut pipe, limit as u64 + 1),
+                            &mut bytes,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        Ok(bytes)
+                    };
+                    let err_read = async {
+                        let Some(mut pipe) = stderr else {
+                            return Ok::<Vec<u8>, String>(Vec::new());
+                        };
+                        let mut bytes = Vec::new();
+                        tokio::io::AsyncReadExt::read_to_end(
+                            &mut tokio::io::AsyncReadExt::take(&mut pipe, 64 * 1024 + 1),
+                            &mut bytes,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        Ok(bytes)
+                    };
+                    let (stdout, stderr, status) =
+                        tokio::join!(read(stdout, 256 * 1024), err_read, child.wait());
+                    Ok::<_, String>((stdout?, stderr?, status.map_err(|e| e.to_string())?))
+                };
+                let (stdout, stderr, status) = tokio::time::timeout(Duration::from_secs(20), run)
+                    .await
+                    .map_err(|_| "the command timed out".to_string())?
+                    .map_err(|error: String| error)?;
+                let mut stdout = String::from_utf8_lossy(&stdout).to_string();
+                let mut stderr = String::from_utf8_lossy(&stderr).to_string();
+                if stdout.len() > 256 * 1024 {
+                    stdout.truncate(256 * 1024);
+                    stdout.push_str("\n… truncated");
+                }
+                if stderr.len() > 64 * 1024 {
+                    stderr.truncate(64 * 1024);
+                    stderr.push_str("\n… truncated");
+                }
+                Ok(json!({
+                    "status": status.code(),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }))
+            }
+        }
+    }
+
+    fn extension_path(&self, value: &str) -> Result<std::path::PathBuf, String> {
+        let base = self
+            .config
+            .workspace
+            .clone()
+            .ok_or_else(|| "no project is open".to_string())?;
+        confine_extension_path(std::path::Path::new(&base), value)
+    }
+
+    async fn host_effect(&mut self, extension_id: &str, effect: rchamber_ext::HostEffect) {
+        use rchamber_ext::HostEffect;
+        let allows = |capability: &str| self.extensions.capability(extension_id, capability);
+        match effect {
+            HostEffect::Toast { kind, message } => {
+                let kind = match kind.as_str() {
+                    "success" => ToastKind::Success,
+                    "warning" => ToastKind::Warning,
+                    "error" => ToastKind::Error,
+                    _ => ToastKind::Info,
+                };
+                self.emit(BackendEvent::Toast { kind, message });
+            }
+            HostEffect::Compose { text, send } => {
+                if send && !allows("prompt") {
+                    return;
+                }
+                if send {
+                    if let (Some(client), Some(session)) =
+                        (self.client.clone(), self.active.clone())
+                    {
+                        self.send_prompt(&client, &session, &text, &[], "steer")
+                            .await;
+                    }
+                } else {
+                    self.emit(BackendEvent::ExtensionCompose { text, send: false });
+                }
+            }
+            HostEffect::Prompt { text, send } => {
+                if !allows("prompt") {
+                    return;
+                }
+                if send {
+                    if let (Some(client), Some(session)) =
+                        (self.client.clone(), self.active.clone())
+                    {
+                        self.send_prompt(&client, &session, &text, &[], "steer")
+                            .await;
+                    }
+                } else {
+                    self.emit(BackendEvent::ExtensionCompose { text, send: false });
+                }
+            }
+            HostEffect::Attach {
+                provider_id,
+                id,
+                title,
+                url,
+            } => {
+                if !allows("prompt") {
+                    return;
+                }
+                self.emit(BackendEvent::ExtensionAttach {
+                    provider_id,
+                    id,
+                    title,
+                    url,
+                })
+            }
+            HostEffect::SetBadge { count } => {
+                self.emit(BackendEvent::ExtensionBadge {
+                    id: extension_id.to_string(),
+                    count,
+                });
+            }
+            HostEffect::Answer { text } => {
+                if !allows("prompt") {
+                    return;
+                }
+                if let (Some(client), Some(session)) = (self.client.clone(), self.active.clone()) {
+                    self.send_prompt(&client, &session, &text, &[], "steer")
+                        .await;
+                }
+            }
+            HostEffect::OpenUrl { url } => {
+                if !allows("prompt") {
+                    return;
+                }
+                self.emit(BackendEvent::ExtensionOpenUrl(url));
+            }
+            HostEffect::Notify { title, body } => {
+                if !allows("notifications") {
+                    return;
+                }
+                self.emit(BackendEvent::Toast {
+                    kind: ToastKind::Info,
+                    message: format!("{title}: {body}"),
+                });
+            }
+            HostEffect::Clipboard(text) => {
+                if !allows("clipboard") {
+                    return;
+                }
+                self.emit(BackendEvent::ExtensionClipboard(text));
+            }
+        }
+    }
+
     fn expand_snippets(&self, text: &str, client: &Client) -> String {
         if self.snippets.is_empty() {
             snippets::expand(text, client.directory())
         } else {
             snippets::expand_with(text, &self.snippets)
         }
+    }
+
+    fn write_prompt_context(&self, session_id: &str, context: &str) -> Option<std::path::PathBuf> {
+        let base = directories::BaseDirs::new()
+            .map(|base| base.config_dir().join("rustchamber").join("context"))
+            .unwrap_or_else(|| std::env::temp_dir().join("rustchamber-context"));
+        std::fs::create_dir_all(&base).ok()?;
+        let safe: String = session_id
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+            .collect();
+        let path = base.join(format!("{safe}.md"));
+        std::fs::write(&path, context).ok()?;
+        Some(path)
     }
 
     async fn send_prompt(
@@ -651,9 +1453,58 @@ impl Inner {
         delivery: &str,
     ) {
         let expanded = self.expand_snippets(text, client);
+        let active = self.extensions.active();
+        let blocks: Vec<String> = active
+            .iter()
+            .flat_map(|extension| {
+                extension.manifest.contributes.blocks.iter().map(|block| {
+                    format!(
+                        "{}({}): {}",
+                        block.name,
+                        block.args.join(", "),
+                        block.description
+                    )
+                })
+            })
+            .collect();
+        let instructions: Vec<String> = active
+            .into_iter()
+            .filter_map(|extension| {
+                let text = extension.manifest.contributes.instructions.clone()?;
+                Some(format!(
+                    "From {}: {}",
+                    sanitize_prompt_fragment(&extension.manifest.name),
+                    sanitize_prompt_fragment(&text)
+                ))
+            })
+            .collect();
+        let mut context = String::new();
+        if !blocks.is_empty() || !instructions.is_empty() {
+            context.push_str(UI_BLOCK_GUIDANCE);
+            if !blocks.is_empty() {
+                context.push_str("\nExtension components:\n");
+                context.push_str(&blocks.join("\n"));
+            }
+            if !instructions.is_empty() {
+                context.push_str("\n\nExtension instructions:\n");
+                context.push_str(&instructions.join("\n\n"));
+            }
+        }
+        let mut files = files.to_vec();
+        if !context.trim().is_empty()
+            && let Some(path) = self.write_prompt_context(session_id, &context)
+            && let Some(file) = PromptFile::from_path(
+                &path,
+                Some("RustChamber context".into()),
+                "text/markdown",
+                Some("Context for this turn.".into()),
+            )
+        {
+            files.push(file);
+        }
         let text = expanded.as_str();
         match client
-            .prompt_full(session_id, text, files, Some(delivery))
+            .prompt_full(session_id, text, &files, Some(delivery))
             .await
         {
             Ok(_) => {
@@ -672,7 +1523,19 @@ impl Inner {
     async fn activate(&mut self, client: Client, id: String) {
         match client.get_session(&id).await {
             Ok(session) => {
+                if let Some(directory) = session.directory().map(str::to_string) {
+                    let sessions = self.cached_sessions.entry(directory).or_default();
+                    if let Some(existing) = sessions
+                        .iter_mut()
+                        .find(|existing| existing.id == session.id)
+                    {
+                        *existing = session.clone();
+                    } else {
+                        sessions.push(session.clone());
+                    }
+                }
                 self.active = Some(id.clone());
+                self.sync_extension_context();
                 self.emit(BackendEvent::SessionActivated(Box::new(session)));
             }
             Err(err) => {
@@ -914,6 +1777,43 @@ impl Inner {
             {
                 self.schedule_messages();
                 self.schedule_inbox();
+            }
+            _ => {}
+        }
+        match &event {
+            LiveEvent::Execution {
+                session_id,
+                state,
+                error,
+            } if *state != ExecutionState::Started => {
+                let outcome = match state {
+                    ExecutionState::Succeeded => "completed",
+                    ExecutionState::Failed => "failed",
+                    ExecutionState::Interrupted => "cancelled",
+                    ExecutionState::Started => "started",
+                };
+                self.sync_extension_context();
+                self.extensions.broadcast_event(
+                    "turn.finished",
+                    json!({
+                        "session": session_id,
+                        "directory": self.config.workspace,
+                        "outcome": outcome,
+                        "error": error.as_ref().map(|error| error.message.clone()),
+                    }),
+                );
+            }
+            LiveEvent::PermissionAsked(request) => {
+                self.sync_extension_context();
+                self.extensions.broadcast_event(
+                    "permission.asked",
+                    json!({
+                        "session": request.session_id,
+                        "directory": self.config.workspace,
+                        "tool": request.action,
+                        "title": request.message,
+                    }),
+                );
             }
             _ => {}
         }
@@ -1204,5 +2104,46 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::Toast { .. } => "toast",
         BackendEvent::PromptQueued { .. } => "prompt-queued",
         BackendEvent::WorkspaceChanged(_) => "workspace-changed",
+        BackendEvent::Extensions(_) => "extensions",
+        BackendEvent::ExtensionInstalled { .. } => "extension-installed",
+        BackendEvent::ExtensionResult { .. } => "extension-result",
+        BackendEvent::ExtensionBlock { .. } => "extension-block",
+        BackendEvent::ExtensionMentions { .. } => "extension-mentions",
+        BackendEvent::ExtensionError { .. } => "extension-error",
+        BackendEvent::ExtensionCompose { .. } => "extension-compose",
+        BackendEvent::ExtensionAttach { .. } => "extension-attach",
+        BackendEvent::ExtensionBadge { .. } => "extension-badge",
+        BackendEvent::ExtensionOpenSession(_) => "extension-open-session",
+        BackendEvent::ExtensionClipboard(_) => "extension-clipboard",
+        BackendEvent::ExtensionOpenUrl(_) => "extension-open-url",
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.extensions.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confines_extension_paths_to_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        assert!(confine_extension_path(base, "a.txt").is_ok());
+        assert!(confine_extension_path(base, "../a.txt").is_err());
+        assert!(confine_extension_path(base, "/etc/hosts").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_dangling_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("payload");
+        std::os::unix::fs::symlink("/tmp/definitely-missing-rchamber-target", &link).unwrap();
+        assert!(confine_extension_path(dir.path(), "payload").is_err());
     }
 }

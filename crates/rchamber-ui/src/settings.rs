@@ -56,7 +56,6 @@ const KEYCAP_PAD_X: f32 = 7.0;
 const KEYCAP_GAP: f32 = 5.0;
 const KEYCAP_FONT: f32 = 13.0;
 const SHORTCUT_ROW_HEIGHT: f32 = 44.0;
-const SHORTCUT_GROUP_GAP: f32 = 20.0;
 
 const APPEARANCE_TITLE_GAP: f32 = 14.0;
 const APPEARANCE_ROW_HEIGHT: f32 = 40.0;
@@ -88,6 +87,7 @@ enum Section {
     Shortcuts,
     About,
     Projects,
+    Extensions,
     Providers,
     Agents,
     Commands,
@@ -102,6 +102,7 @@ impl Section {
             Section::Shortcuts => Icon::Command,
             Section::About => Icon::Info,
             Section::Projects => Icon::Folder,
+            Section::Extensions => Icon::Puzzle,
             Section::Providers => Icon::Spark,
             Section::Agents => Icon::Bot,
             Section::Commands => Icon::Terminal,
@@ -137,7 +138,7 @@ pub struct Page {
     keywords: &'static [&'static str],
 }
 
-pub static PAGES: [Page; 9] = [
+pub static PAGES: [Page; 10] = [
     Page {
         section: Section::General,
         label: "General",
@@ -191,6 +192,22 @@ pub static PAGES: [Page; 9] = [
             "repository",
             "directory",
             "folder",
+        ],
+    },
+    Page {
+        section: Section::Extensions,
+        label: "Extensions",
+        description: "Native extensions: panels, status, commands and permissions.",
+        group: Group::Workspace,
+        keywords: &[
+            "extension",
+            "extensions",
+            "plugin",
+            "plugins",
+            "lua",
+            "permissions",
+            "capabilities",
+            "install",
         ],
     },
     Page {
@@ -736,9 +753,10 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     page_column(ui, |ui| match section {
                         Section::General => general(ui, app, &p),
                         Section::Appearance => appearance(ui, app, &p),
-                        Section::Shortcuts => shortcuts(ui, &p),
+                        Section::Shortcuts => shortcuts(ui, app, &p),
                         Section::About => about(ui, app, &p),
                         Section::Projects => projects(ui, app, &p),
+                        Section::Extensions => crate::settings_extensions::show(ui, app, &p),
                         Section::Providers => providers(ui, app, &p),
                         Section::Agents => agents(ui, app, &p),
                         Section::Commands => commands(ui, app, &p),
@@ -1044,7 +1062,7 @@ fn section_pad(ui: &Ui) -> f32 {
     }
 }
 
-fn page_column(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn page_column(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let available = ui.available_width();
     let box_width = available.min(CONTENT_MAX_WIDTH);
     let wide = box_width >= CONTENT_WIDE;
@@ -1097,7 +1115,7 @@ fn description_text(ui: &mut Ui, p: &Palette, text: &str, font: egui::FontId) {
     ui.painter().galley(rect.min, galley, p.fg_muted);
 }
 
-fn page_header(ui: &mut Ui, p: &Palette, title: &str, description: &str) {
+pub(crate) fn page_header(ui: &mut Ui, p: &Palette, title: &str, description: &str) {
     ui.label(
         RichText::new(title)
             .font(theme::font_semibold(theme::TEXT_PAGE_TITLE))
@@ -1985,6 +2003,7 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     let mut ui_scale = appearance_settings.ui_scale;
     let mut code_size = appearance_settings.code_size;
     let mut terminal_size = appearance_settings.terminal_size;
+    let mut chat_scale = appearance_settings.chat_scale;
     let mut spacing_scale = appearance_settings.spacing_scale;
     let mut weight = UI_WEIGHTS
         .iter()
@@ -2024,6 +2043,20 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                         DEFAULT_TERMINAL_SIZE,
                     ) {
                         terminal_size = next;
+                    }
+                });
+                appearance_field(ui, p, "Chat text size", |ui| {
+                    let percent = chat_scale * 100.0;
+                    if let Some(next) = percent_stepper(
+                        ui,
+                        p,
+                        percent,
+                        crate::theme_store::CHAT_SCALE_MIN * 100.0,
+                        crate::theme_store::CHAT_SCALE_MAX * 100.0,
+                        5.0,
+                        100.0,
+                    ) {
+                        chat_scale = next / 100.0;
                     }
                 });
                 appearance_field(ui, p, "Spacing density", |ui| {
@@ -2115,6 +2148,10 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     }
     if (terminal_size - app.settings.appearance.terminal_size).abs() > 0.0001 {
         app.settings.appearance.terminal_size = terminal_size;
+        changed = true;
+    }
+    if (chat_scale - app.settings.appearance.chat_scale).abs() > 0.0001 {
+        app.settings.appearance.chat_scale = chat_scale;
         changed = true;
     }
     if (spacing_scale - app.settings.appearance.spacing_scale).abs() > 0.0001 {
@@ -2852,10 +2889,10 @@ fn keycap_width(ui: &Ui, p: &Palette, key: &str) -> f32 {
     (galley.size().x + KEYCAP_PAD_X * 2.0).max(KEYCAP_MIN_WIDTH)
 }
 
-fn shortcut_row(ui: &mut Ui, p: &Palette, label: &str, keys: &[String]) {
-    let (rect, _) = ui.allocate_exact_size(
+fn shortcut_row(ui: &mut Ui, p: &Palette, label: &str, keys: &[String]) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), SHORTCUT_ROW_HEIGHT),
-        Sense::hover(),
+        Sense::click(),
     );
     ui.painter().text(
         Pos2::new(rect.left(), rect.center().y),
@@ -2883,63 +2920,148 @@ fn shortcut_row(ui: &mut Ui, p: &Palette, label: &str, keys: &[String]) {
             .text(cap.center(), Align2::CENTER_CENTER, key, font.clone(), p.fg);
         left += width + KEYCAP_GAP;
     }
+    response
 }
 
-type ShortcutGroup = (&'static str, Vec<(&'static str, Vec<String>)>);
-
-fn shortcuts(ui: &mut Ui, p: &Palette) {
-    page_header(ui, p, "Shortcuts", "Keys used across the app.");
-    let groups: [ShortcutGroup; 4] = [
-        (
-            "Session controls",
-            vec![
-                ("New session", shortcut(&["mod"], "N")),
-                ("Previous session", shortcut(&["mod", "alt"], "←")),
-                ("Next session", shortcut(&["mod", "alt"], "→")),
-            ],
-        ),
-        (
-            "Models & agents",
-            vec![("Open model selector", shortcut(&["mod", "shift"], "M"))],
-        ),
-        (
-            "Panels & tools",
-            vec![
-                ("Toggle terminal dock", shortcut(&["mod"], "J")),
-                ("Toggle sidebar", shortcut(&["mod"], "B")),
-                ("Close tab in Files and Terminal", shortcut(&["mod"], "W")),
-            ],
-        ),
-        (
-            "Navigation",
-            vec![
-                ("Open command palette", shortcut(&["mod"], "K")),
-                ("Open settings", shortcut(&["mod"], ",")),
-                ("Close overlay", vec!["Esc".to_string()]),
-            ],
-        ),
-    ];
-    for (index, (title, rows)) in groups.iter().enumerate() {
-        if index > 0 {
-            ui.add_space(SHORTCUT_GROUP_GAP);
-            let rect = ui.available_rect_before_wrap();
-            ui.painter().hline(
-                rect.left()..=rect.right(),
-                rect.top(),
-                Stroke::new(theme::BORDER, p.edge_color()),
-            );
-            ui.add_space(SHORTCUT_GROUP_GAP);
-        }
+fn shortcuts(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
+    use crate::keybindings::{Command, Keymap};
+    page_header(
+        ui,
+        p,
+        "Shortcuts",
+        "Click a shortcut and press the new keys. Backspace clears it, Escape cancels.",
+    );
+    let query_id = Id::unique("settings.shortcuts.query");
+    let capture_id = Id::unique("settings.shortcuts.capture");
+    let mut query = get::<String>(ui.ctx(), query_id);
+    ui.add(
+        egui::TextEdit::singleline(&mut query)
+            .hint_text("Search shortcuts…")
+            .font(theme::font(theme::TEXT_UI_LABEL))
+            .desired_width(f32::INFINITY)
+            .margin(Margin::symmetric(9, 7)),
+    );
+    set(ui.ctx(), query_id, query.clone());
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
         ui.label(
-            RichText::new(*title)
-                .font(theme::font_semibold(theme::TEXT_UI_LABEL))
-                .color(p.fg),
+            RichText::new("Keys are saved in settings.json.")
+                .font(theme::font(theme::TEXT_META))
+                .color(p.fg_faint),
         );
-        ui.add_space(10.0);
-        for (label, keys) in rows {
-            shortcut_row(ui, p, label, keys);
+        if widgets::ghost_button(ui, "Reset all", Some(Icon::Refresh), p).clicked() {
+            app.settings.keybindings.clear();
+            app.settings.save();
         }
+    });
+    ui.add_space(10.0);
+    let keymap = Keymap::from_settings(&app.settings.keybindings);
+    let mut capturing: Option<usize> = get::<Option<usize>>(ui.ctx(), capture_id);
+    if let Some(index) = capturing
+        && let Some(command) = Command::ALL.get(index).copied()
+    {
+        match crate::keybindings::capture(ui.ctx()) {
+            Some(crate::keybindings::Capture::Binding(binding)) => {
+                app.settings
+                    .keybindings
+                    .insert(command.id().to_string(), binding.text());
+                app.settings.save();
+                capturing = None;
+            }
+            Some(crate::keybindings::Capture::Clear) => {
+                app.settings.keybindings.remove(command.id());
+                app.settings.save();
+                capturing = None;
+            }
+            Some(crate::keybindings::Capture::Cancel) => {
+                capturing = None;
+            }
+            None => {}
+        }
+        set(ui.ctx(), capture_id, capturing);
     }
+    let needle = query.to_lowercase();
+    let mut shown = 0usize;
+    for (index, command) in Command::ALL.iter().enumerate() {
+        let binding = keymap.binding(*command);
+        let keys = binding_keys(binding);
+        let haystack = format!("{} {}", command.label(), keys.join(" ")).to_lowercase();
+        if !needle.is_empty() && !haystack.contains(&needle) {
+            continue;
+        }
+        shown += 1;
+        if capturing == Some(index) {
+            let (rect, _) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), SHORTCUT_ROW_HEIGHT),
+                Sense::hover(),
+            );
+            ui.painter().text(
+                Pos2::new(rect.left(), rect.center().y),
+                Align2::LEFT_CENTER,
+                command.label(),
+                theme::font(theme::TEXT_UI_LABEL),
+                p.fg,
+            );
+            ui.painter().text(
+                Pos2::new(rect.right(), rect.center().y),
+                Align2::RIGHT_CENTER,
+                "Press a key…",
+                theme::font(theme::TEXT_META),
+                p.primary,
+            );
+        } else {
+            let response = shortcut_row(ui, p, command.label(), &keys);
+            if response.clicked() {
+                capturing = Some(index);
+                set(ui.ctx(), capture_id, capturing);
+            }
+        }
+        ui.add_space(2.0);
+    }
+    if shown == 0 {
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("No shortcut matches.")
+                .font(theme::font(theme::TEXT_META))
+                .color(p.fg_faint),
+        );
+    }
+}
+
+fn binding_keys(binding: crate::keybindings::Binding) -> Vec<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if binding.command {
+        parts.push("mod");
+    }
+    if binding.ctrl && !binding.command {
+        parts.push("ctrl");
+    }
+    if binding.shift {
+        parts.push("shift");
+    }
+    if binding.alt {
+        parts.push("alt");
+    }
+    let key = match binding.key {
+        egui::Key::ArrowLeft => "←",
+        egui::Key::ArrowRight => "→",
+        egui::Key::ArrowUp => "↑",
+        egui::Key::ArrowDown => "↓",
+        egui::Key::Comma => ",",
+        egui::Key::Period => ".",
+        egui::Key::Slash => "/",
+        egui::Key::Backslash => "\\",
+        egui::Key::Minus => "-",
+        egui::Key::Plus => "+",
+        egui::Key::Equals => "=",
+        egui::Key::Space => "Space",
+        egui::Key::Enter => "Enter",
+        egui::Key::Escape => "Esc",
+        egui::Key::Backspace => "Backspace",
+        egui::Key::Tab => "Tab",
+        other => other.name(),
+    };
+    shortcut(&parts, key)
 }
 
 fn text_link(ui: &mut Ui, p: &Palette, label: &str, url: &str, icon: Icon) {

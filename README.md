@@ -203,13 +203,16 @@ The output is `dist/RustChamber-<version>-linux-<arch>.tar.gz`.
   pasted images, and a queue while the agent is busy.
 - **Attachments** — files, images sent inline, HEIC converted to JPEG, and Office/ODF
   documents unpacked into text plus embedded images.
-- **Files** — project tree, viewer, editor, find, save, and a guard for large files.
+- **Files** — project tree, editor, find and save, plus native read-only viewers for SQLite, Parquet, ZIP, Jupyter, XLSX/ODS, DOCX and PPTX. CSV exports to Excel.
+- **UI blocks** — agents can draw native tables, charts, forms, choices and progress in a reply with `openui-lang`.
+- **Extensions** — native Lua extensions add panels, status sections, `@` mentions, slash commands, message actions, tool renderers and chat blocks. Build one with `/new-extension`; install links open an approval sheet. See [`docs/extensions.md`](docs/extensions.md).
+- **Run commands** — shell code blocks in a finished reply have a Run button and show their output in place.
 - **Changes** — session diff and per-turn diffs with file statistics.
 - **Git** — status, stage, unstage, discard, commit, branches, log, fetch, pull, and push.
 - **Terminal** — a real PTY with tabs, colors, scrollback, alternate screen, and resize.
 - **Appearance** — light and dark theme pairs, bundled Inter, JetBrains Mono, and Instrument
   Serif, plus density, type size, and motion controls.
-- **Command palette** — sessions, commands, and settings from `⌘K`.
+- **Command palette and shortcuts** — sessions, commands and settings from `⌘K`; every global shortcut can be searched and rebound in Settings → Shortcuts.
 
 ![RustChamber chat with session context](docs/screenshots/chat.png)
 
@@ -294,6 +297,10 @@ Snippets are Markdown files in `~/.config/opencode/snippets` or
 | Settings | `⌘,` | `Ctrl+,` |
 | Close overlay | `Esc` | `Esc` |
 
+The session, panel, model and navigation shortcuts can be changed in
+Settings → Shortcuts: click the row, press the new keys, and the app stores the binding in
+`settings.json`. Close tab, Save file and Esc are fixed for now.
+
 ## Architecture
 
 The UI thread never performs I/O. Screens emit `Action` values to a Tokio backend actor,
@@ -309,6 +316,7 @@ on demand.
 | `rchamber-git` | Native git operations with timeouts and porcelain parsing |
 | `rchamber-term` | PTY session and VT emulator |
 | `rchamber-update` | Release feed, background download, signature checks, and self-install |
+| `rchamber-ext` | Extension manifest, registry, install/approval, Lua sandbox, declarative UI schema, authoring skill |
 | `rchamber` | Binary entry point |
 
 More detail is in [`docs/architecture.md`](docs/architecture.md).
@@ -321,7 +329,8 @@ backend/UI split keeps network latency out of the frame loop.
 
 A webview would have been faster to ship. The goal here was a native binary with no
 JavaScript runtime, a real PTY, and direct control over how diffs and terminal cells are
-drawn.
+drawn. Extensions keep that promise: they run as sandboxed Lua and draw through the native
+widget renderer, not an embedded browser.
 
 ## Status
 
@@ -330,7 +339,7 @@ but it has not received the same hands-on testing.
 
 Known limits:
 
-- No embedded web preview, plugin manager, or MCP configuration editor.
+- No embedded web preview or MCP configuration editor. Extensions are native Lua packages, not web pages.
 - Providers, agents, commands, and skills are shown read-only, as reported by OpenCode.
 - AI session renaming, Mini Chat, and worktree moves are visible in menus but disabled
   until their backends exist.

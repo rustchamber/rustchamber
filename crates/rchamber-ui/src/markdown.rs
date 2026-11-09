@@ -20,9 +20,18 @@ const QUOTE_BAR: f32 = 2.0;
 const MARKER_WIDTH: f32 = theme::LIST_INDENT;
 const MAX_INLINE_DEPTH: usize = 8;
 
-#[derive(Default)]
 pub struct Markdown {
     _cache: CommonMarkCache,
+    pub scale: f32,
+}
+
+impl Default for Markdown {
+    fn default() -> Self {
+        Self {
+            _cache: CommonMarkCache::default(),
+            scale: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -381,6 +390,12 @@ impl Markdown {
                 .insert(TextStyle::Monospace, theme::font_mono(theme::TEXT_CODE));
             ui.scope(|ui| {
                 ui.set_style(style);
+                let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
+                let base = InlineBase {
+                    size: base.size * scale,
+                    line_height: base.line_height * scale,
+                    ..base
+                };
                 let lines: Vec<&str> = text.split('\n').collect();
                 render_blocks(ui, &lines, p, base, 0);
             });
@@ -418,7 +433,7 @@ fn render_blocks(ui: &mut Ui, lines: &[&str], p: &Palette, base: InlineBase, dep
             if rendered {
                 ui.add_space(theme::HEADING_TOP);
             }
-            heading(ui, level, line.trim(), p);
+            heading(ui, level, line.trim(), p, base.size / theme::TEXT_MARKDOWN);
             gap = theme::PARAGRAPH_GAP;
             rendered = true;
             index += 2;
@@ -428,7 +443,7 @@ fn render_blocks(ui: &mut Ui, lines: &[&str], p: &Palette, base: InlineBase, dep
             if rendered {
                 ui.add_space(theme::HEADING_TOP);
             }
-            heading(ui, level, line.trim(), p);
+            heading(ui, level, line.trim(), p, base.size / theme::TEXT_MARKDOWN);
             gap = theme::PARAGRAPH_GAP;
             rendered = true;
             index += 1;
@@ -483,6 +498,18 @@ fn render_blocks(ui: &mut Ui, lines: &[&str], p: &Palette, base: InlineBase, dep
             rendered = true;
             continue;
         }
+        if let Some((label, url)) = standalone_install_link(line) {
+            if rendered {
+                ui.add_space(gap);
+            }
+            if widgets::primary_button(ui, &label, Some(Icon::Download), p).clicked() {
+                open_link(ui.ctx(), &url);
+            }
+            gap = theme::PARAGRAPH_GAP;
+            rendered = true;
+            index += 1;
+            continue;
+        }
         if rendered {
             ui.add_space(gap);
         }
@@ -504,6 +531,18 @@ fn render_blocks(ui: &mut Ui, lines: &[&str], p: &Palette, base: InlineBase, dep
         index = end.max(index + 1);
     }
     rendered
+}
+
+fn standalone_install_link(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if !line.starts_with('[') {
+        return None;
+    }
+    let close = line.find("](")?;
+    let label = line.get(1..close)?.to_string();
+    let url = line.get(close + 2..)?.strip_suffix(')')?.trim();
+    rchamber_ext::parse_install_link(url)?;
+    Some((label, url.to_string()))
 }
 
 fn paragraph_view(ui: &mut Ui, lines: &[&str], p: &Palette, base: InlineBase) {
@@ -533,8 +572,13 @@ fn inline_view(ui: &mut Ui, text: &str, p: &Palette, base: InlineBase) -> Respon
     place_inline(ui, builder, width, p).0
 }
 
-fn heading(ui: &mut Ui, level: usize, text: &str, p: &Palette) {
+fn heading(ui: &mut Ui, level: usize, text: &str, p: &Palette, scale: f32) {
     let base = InlineBase::heading(p, level);
+    let base = InlineBase {
+        size: base.size * scale,
+        line_height: base.line_height * scale,
+        ..base
+    };
     let width = ui.available_width();
     let text = text.trim_start_matches('#').trim();
     let mut builder = InlineBuilder::new(p, base);
@@ -1246,6 +1290,15 @@ fn code_block(
         code.push_str(lines[index]);
         index += 1;
     }
+    if lang == "openui-lang" || lang == "openui" {
+        crate::blocks::show(ui, &code, p, base.size);
+        return index;
+    }
+    let runnable = matches!(
+        lang,
+        "bash" | "sh" | "zsh" | "shell" | "console" | "powershell" | "cmd" | "fish"
+    );
+    let run_id = egui::Id::unique(("shell-run", code.as_str()));
     let width = ui.available_width();
     let frame = egui::Frame::new()
         .fill(p.card)
@@ -1278,6 +1331,18 @@ fn code_block(
                 .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
         );
         widgets::copy_button(&mut action_ui, &code, p);
+        if runnable {
+            let run_rect = Rect::from_center_size(
+                Pos2::new(header_rect.right() - 46.0, header_rect.center().y),
+                Vec2::splat(widgets::HIT_XS),
+            );
+            let mut run_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(run_rect)
+                    .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
+            );
+            crate::shell_run::run_button(&mut run_ui, p, run_id, &code);
+        }
         ui.painter().hline(
             header_rect.left()..=header_rect.right(),
             header_rect.bottom(),
@@ -1293,7 +1358,7 @@ fn code_block(
             &text,
             0.0,
             TextFormat {
-                font_id: theme::font_mono(theme::TEXT_CODE),
+                font_id: theme::font_mono(theme::TEXT_CODE * base.size / theme::TEXT_MARKDOWN),
                 color: base.color,
                 line_height: Some(theme::LINE_CODE),
                 ..Default::default()
@@ -1324,6 +1389,9 @@ fn code_block(
                 );
             });
     });
+    if runnable {
+        crate::shell_run::show(ui, run_id, p);
+    }
     index
 }
 
@@ -1346,6 +1414,12 @@ fn link_interaction(ui: &Ui, response: &Response, galley: &Galley, links: &[Link
 }
 
 fn open_link(ctx: &egui::Context, url: &str) {
+    if url.starts_with("rchamber://") {
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::unique("rchamber-deep-link"), url.to_string())
+        });
+        return;
+    }
     if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
         ctx.open_url(egui::OpenUrl::new_tab(url));
     }
@@ -1479,5 +1553,16 @@ mod render_tests {
             md.show_at(ui, egui::Id::unique("narrow"), SAMPLE, &palette);
             assert!(ui.min_rect().height() > 200.0);
         });
+    }
+
+    #[test]
+    fn install_links_become_buttons() {
+        let (label, url) = standalone_install_link(
+            "[Install Deploys](rchamber://extensions/install?path=/tmp/deploys)",
+        )
+        .unwrap();
+        assert_eq!(label, "Install Deploys");
+        assert!(url.starts_with("rchamber://extensions/install"));
+        assert!(standalone_install_link("[docs](https://example.com)").is_none());
     }
 }
