@@ -680,12 +680,21 @@ pub struct ModelSwitchedMessage {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationState {
+    pub location: Option<LocationRef>,
+    #[serde(rename = "projectID")]
+    pub project_id: Option<String>,
+    pub subpath: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LocationSwitchedMessage {
     pub id: String,
     #[serde(default)]
     pub time: MessageTime,
     pub location: Option<LocationRef>,
-    pub previous: Option<LocationRef>,
+    pub previous: Option<LocationState>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -886,6 +895,39 @@ mod tests {
         let value = serde_json::to_value(&reference).unwrap();
         assert!(value.get("variant").is_none());
         assert_eq!(value["id"], "deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn location_switched_message_decodes_the_wrapped_previous_location() {
+        let message: Message = serde_json::from_str(
+            r#"{
+                "id":"msg_1",
+                "time":{"created":1794240394195},
+                "type":"location-switched",
+                "location":{"directory":"/repo"},
+                "projectID":"p2",
+                "subpath":"",
+                "previous":{
+                    "location":{"directory":"/old"},
+                    "projectID":"p1",
+                    "subpath":""
+                }
+            }"#,
+        )
+        .unwrap();
+        let Message::LocationSwitched(message) = message else {
+            panic!("expected a location-switched message");
+        };
+        assert_eq!(
+            message.location.map(|l| l.directory),
+            Some("/repo".to_string())
+        );
+        let previous = message.previous.unwrap();
+        assert_eq!(
+            previous.location.map(|l| l.directory),
+            Some("/old".to_string())
+        );
+        assert_eq!(previous.project_id.as_deref(), Some("p1"));
     }
 
     #[test]
