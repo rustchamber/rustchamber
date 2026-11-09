@@ -53,6 +53,6 @@ modules:
     sources:
       - type: git
         url: https://github.com/rustchamber/rustchamber.git
-        tag: v0.2.9
-        commit: 2f8ad2c1f433dd6f95cb495ed01c429cf49d319d
+        tag: v0.2.10
+        commit: 67a6e1cba4e5bb7c952d3f32d538f78c50603afa
       - cargo-sources.json
