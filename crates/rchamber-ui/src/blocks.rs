@@ -95,6 +95,203 @@ pub fn show_widgets(ui: &mut Ui, widgets: &[Widget], p: &Palette, base_size: f32
     renderer.send_button(ui);
 }
 
+pub fn min_width(ui: &Ui, widgets: &[Widget], base_size: f32) -> f32 {
+    WidthMetrics::new(ui, base_size).widgets(widgets)
+}
+
+pub fn row_width(ui: &Ui, children: &[Widget], base_size: f32) -> f32 {
+    let metrics = WidthMetrics::new(ui, base_size);
+    metrics.row(children)
+}
+
+struct WidthMetrics<'a> {
+    ui: &'a Ui,
+    base: f32,
+}
+
+impl<'a> WidthMetrics<'a> {
+    fn new(ui: &'a Ui, base_size: f32) -> Self {
+        let base = if base_size.is_finite() && base_size > 0.0 {
+            base_size
+        } else {
+            theme::TEXT_MARKDOWN
+        };
+        Self { ui, base }
+    }
+
+    fn text(&self, text: &str, font: egui::FontId) -> f32 {
+        self.ui
+            .painter()
+            .layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER)
+            .size()
+            .x
+    }
+
+    fn word(&self, text: &str, font: egui::FontId, cap: f32) -> f32 {
+        text.split_whitespace()
+            .map(|word| self.text(word, font.clone()))
+            .fold(0.0_f32, f32::max)
+            .min(cap)
+    }
+
+    fn widgets(&self, widgets: &[Widget]) -> f32 {
+        widgets
+            .iter()
+            .map(|widget| self.widget(widget))
+            .fold(0.0_f32, f32::max)
+    }
+
+    fn row(&self, children: &[Widget]) -> f32 {
+        let gaps = theme::SPACE_2 * (children.len().saturating_sub(1)) as f32;
+        children.iter().map(|child| self.widget(child)).sum::<f32>() + gaps
+    }
+
+    fn widget(&self, widget: &Widget) -> f32 {
+        match widget {
+            Widget::Stack { children, .. } => self.widgets(children),
+            Widget::Row { children, .. } => {
+                if children.is_empty() {
+                    0.0
+                } else {
+                    self.row(children)
+                }
+            }
+            Widget::Card { children, .. } => self.widgets(children) + 24.0,
+            Widget::Tabs { tabs } => {
+                let header = tabs
+                    .iter()
+                    .map(|tab| self.text(&tab.label, theme::font(theme::TEXT_MICRO)) + 24.0)
+                    .sum::<f32>();
+                let body = tabs
+                    .iter()
+                    .map(|tab| self.widgets(&tab.children))
+                    .fold(0.0_f32, f32::max);
+                header.max(body)
+            }
+            Widget::Text { markdown } => self.word(markdown, theme::font(self.base), 360.0),
+            Widget::Heading { text, level } => {
+                let scale = match level.unwrap_or(3).clamp(1, 6) {
+                    1 => 1.46,
+                    2 => 1.28,
+                    3 => 1.13,
+                    4 => 1.02,
+                    5 => 0.95,
+                    _ => 0.88,
+                };
+                self.word(text, theme::font_semibold(self.base * scale), 360.0)
+            }
+            Widget::Code { .. } => 0.0,
+            Widget::Badge { label, .. } => {
+                self.text(label, theme::font_medium(self.base * 0.78)) + 16.0
+            }
+            Widget::Callout {
+                markdown, title, ..
+            } => {
+                let title = title
+                    .as_deref()
+                    .map(|title| self.text(title, theme::font_semibold(self.base * 0.94)))
+                    .unwrap_or(0.0);
+                title
+                    .max(self.word(markdown, theme::font(self.base * 0.95), 320.0))
+                    .max(120.0)
+                    + 24.0
+            }
+            Widget::KeyValue { items } => items
+                .iter()
+                .map(|item| {
+                    let label = self
+                        .text(&item.label, theme::font(self.base * 0.88))
+                        .clamp(80.0, 200.0);
+                    let value = self.word(&item.value.text(), theme::font(self.base * 0.94), 240.0);
+                    label + 8.0 + value.max(40.0)
+                })
+                .fold(0.0_f32, f32::max),
+            Widget::Table { .. } => 0.0,
+            Widget::List { items, .. } => items
+                .iter()
+                .map(|item| {
+                    let title = self.word(&item.title, theme::font_medium(self.base * 0.96), 320.0);
+                    let body = item
+                        .markdown
+                        .as_deref()
+                        .map(|markdown| self.word(markdown, theme::font(self.base * 0.9), 320.0))
+                        .unwrap_or(0.0);
+                    theme::LIST_INDENT + title.max(body).max(80.0)
+                })
+                .fold(0.0_f32, f32::max),
+            Widget::Steps { items, direction } => match direction {
+                Direction::Row => items
+                    .iter()
+                    .map(|item| {
+                        self.word(&item.title, theme::font_medium(self.base * 0.94), 240.0)
+                            .max(110.0)
+                    })
+                    .fold(0.0_f32, f32::max),
+                Direction::Column => {
+                    24.0 + items
+                        .iter()
+                        .map(|item| {
+                            self.word(&item.title, theme::font_medium(self.base * 0.96), 320.0)
+                        })
+                        .fold(80.0_f32, f32::max)
+                }
+            },
+            Widget::Stat { label, value, .. } => {
+                let value = self.text(&value.text(), theme::font_semibold(self.base * 1.65));
+                let label = self.word(label, theme::font(self.base * 0.82), 200.0);
+                value.max(label) + 24.0
+            }
+            Widget::Progress { label, .. } => {
+                self.text(label, theme::font_medium(self.base * 0.9)) + 64.0
+            }
+            Widget::BarChart { series, labels, .. } | Widget::LineChart { series, labels, .. } => {
+                let legend = series
+                    .iter()
+                    .map(|series| self.text(&series.name, theme::font(self.base * 0.8)) + 18.0)
+                    .fold(0.0_f32, f32::max);
+                let ticks = labels
+                    .iter()
+                    .map(|label| self.text(label, theme::font(self.base * 0.75)))
+                    .fold(0.0_f32, f32::max);
+                legend.max(ticks * 2.0).max(200.0)
+            }
+            Widget::Choice { options, .. } => {
+                let described = options.iter().any(|option| {
+                    option
+                        .description()
+                        .is_some_and(|value| !value.trim().is_empty())
+                });
+                if described {
+                    180.0
+                } else {
+                    options
+                        .iter()
+                        .map(|option| {
+                            self.text(option.label(), theme::font_medium(theme::TEXT_UI_LABEL))
+                                + 20.0
+                        })
+                        .fold(80.0_f32, f32::max)
+                }
+            }
+            Widget::Input { .. } => 140.0,
+            Widget::DateInput { .. } => 170.0,
+            Widget::Slider { .. } => 180.0,
+            Widget::Details { children, .. } => self.widgets(children),
+            Widget::Divider => 0.0,
+            Widget::Button { label, .. } => {
+                self.text(label, theme::font_medium(theme::TEXT_UI_LABEL)) + 24.0
+            }
+            Widget::Image { .. } => 120.0,
+            Widget::ExtensionBlock { name, args } => host(self.ui.ctx())
+                .tree
+                .as_ref()
+                .and_then(|tree| tree(name, args))
+                .map(|widgets| self.widgets(&widgets))
+                .unwrap_or(0.0),
+        }
+    }
+}
+
 struct BlockRenderer<'a> {
     p: &'a Palette,
     base: f32,
@@ -167,9 +364,10 @@ impl<'a> BlockRenderer<'a> {
                 });
             }
             Widget::Row { wrap, children } => {
+                let wrap = *wrap || row_width(ui, children, self.base) > ui.available_width();
                 ui.scope(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(theme::SPACE_2, theme::SPACE_2);
-                    if *wrap {
+                    if wrap {
                         ui.horizontal_wrapped(|ui| {
                             for child in children {
                                 self.widget(ui, child);
@@ -2470,6 +2668,85 @@ mod tests {
         assert_eq!(format_chart_number(12.5, false), "12.5");
         assert_eq!(format_chart_number(1_500.0, false), "1.5k");
         assert_eq!(format_chart_number(2_400_000.0, false), "2.4M");
+    }
+
+    fn button(label: &str) -> Widget {
+        Widget::Button {
+            label: label.to_string(),
+            variant: ExtButtonVariant::Primary,
+            value: None,
+        }
+    }
+
+    #[test]
+    fn a_row_measures_every_button_regardless_of_wrap() {
+        egui::__run_test_ui(|ui| {
+            let buttons = vec![button("Iniciar deploy"), button("Marcar sucesso")];
+            let single = min_width(ui, &buttons[..1], theme::TEXT_MARKDOWN);
+            let row = Widget::Row {
+                wrap: false,
+                children: buttons.clone(),
+            };
+            let row_width = min_width(ui, std::slice::from_ref(&row), theme::TEXT_MARKDOWN);
+            assert!(row_width > single * 1.8);
+
+            let wrapped = Widget::Row {
+                wrap: true,
+                children: buttons,
+            };
+            assert_eq!(
+                min_width(ui, std::slice::from_ref(&wrapped), theme::TEXT_MARKDOWN),
+                row_width
+            );
+        });
+    }
+
+    #[test]
+    fn panel_width_grows_with_a_button_row() {
+        egui::__run_test_ui(|ui| {
+            let plain = vec![button("Zerar")];
+            let row = vec![Widget::Row {
+                wrap: false,
+                children: vec![
+                    button("Iniciar deploy"),
+                    button("Marcar sucesso"),
+                    button("Marcar falha"),
+                    button("Zerar"),
+                ],
+            }];
+            assert!(
+                min_width(ui, &row, theme::TEXT_MARKDOWN)
+                    > min_width(ui, &plain, theme::TEXT_MARKDOWN) * 3.0
+            );
+        });
+    }
+
+    #[test]
+    fn a_button_row_reflows_at_the_panel_minimum_width() {
+        egui::__run_test_ui(|ui| {
+            let bounds = Rect::from_min_size(ui.min_rect().min, Vec2::new(300.0, 500.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
+            let widgets = vec![Widget::Row {
+                wrap: false,
+                children: vec![
+                    button("Iniciar deploy"),
+                    button("Marcar sucesso"),
+                    button("Marcar falha"),
+                    button("Zerar"),
+                ],
+            }];
+            show_widgets(
+                &mut child,
+                &widgets,
+                &Palette::light(),
+                theme::TEXT_MARKDOWN,
+            );
+            assert!(
+                child.min_rect().width() <= 301.0,
+                "row used {} points",
+                child.min_rect().width()
+            );
+        });
     }
 
     #[test]

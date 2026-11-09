@@ -56,9 +56,10 @@ deleted from disk.
 
 ## Where it shows up
 
-- **Panel** — a rail icon and a docked panel. The extension returns widgets; the header has
-  refresh, maximize/minimize and close controls, and the panel keeps its own tab selection
-  and form state.
+- **Panel** — a rail icon and a docked panel. The extension returns widgets; the panel
+  fits its width to the content, never below the same minimum as the other panels, and
+  reflows when the divider is dragged. The header has refresh, maximize/minimize and
+  close controls, and the panel keeps its own tab selection and form state.
 - **Status section** — a block inside the chat's context panel, refreshed on the manifest's
   interval.
 - **Mentions** — rows in the `@` menu. Selecting a row inserts its text into the composer;

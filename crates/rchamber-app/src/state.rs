@@ -249,10 +249,26 @@ pub struct ExtensionUiState {
     pub installed: Vec<rchamber_ext::InstalledExtension>,
     pub status: HashMap<String, Vec<Widget>>,
     pub panels: HashMap<String, Vec<Widget>>,
+    pub panel_revisions: HashMap<String, u64>,
     pub blocks: HashMap<String, Vec<Widget>>,
     pub errors: HashMap<String, ExtensionFailure>,
     pub badges: HashMap<String, i64>,
     pub mentions: Vec<crate::extensions::MentionRow>,
+}
+
+impl ExtensionUiState {
+    pub fn set_panel(&mut self, extension_id: String, widgets: Vec<Widget>) {
+        let revision = self
+            .panel_revisions
+            .entry(extension_id.clone())
+            .or_default();
+        *revision = revision.wrapping_add(1);
+        self.panels.insert(extension_id, widgets);
+    }
+
+    pub fn panel_revision(&self, extension_id: &str) -> u64 {
+        self.panel_revisions.get(extension_id).copied().unwrap_or(0)
+    }
 }
 
 fn clear_failure(errors: &mut HashMap<String, ExtensionFailure>, extension_id: &str, method: &str) {
@@ -546,6 +562,9 @@ impl AppModel {
                     .collect();
                 self.extensions.status.retain(|id, _| active.contains(id));
                 self.extensions.panels.retain(|id, _| active.contains(id));
+                self.extensions
+                    .panel_revisions
+                    .retain(|id, _| active.contains(id));
                 self.extensions.badges.retain(|id, _| active.contains(id));
                 self.extensions.errors.retain(|id, _| active.contains(id));
                 self.extensions
@@ -583,7 +602,7 @@ impl AppModel {
                     }
                 } else if method == "panel" || call_id == "panel" {
                     if let Some(widgets) = widgets {
-                        self.extensions.panels.insert(extension_id.clone(), widgets);
+                        self.extensions.set_panel(extension_id.clone(), widgets);
                         clear_failure(&mut self.extensions.errors, &extension_id, "panel");
                     } else {
                         self.extensions.errors.insert(
@@ -596,13 +615,13 @@ impl AppModel {
                     }
                 } else if call_id == "panel-action" {
                     if let Some(widgets) = widgets {
-                        self.extensions.panels.insert(extension_id.clone(), widgets);
+                        self.extensions.set_panel(extension_id.clone(), widgets);
                         clear_failure(&mut self.extensions.errors, &extension_id, "panel");
                     }
                 } else if let Some(widgets) = widgets
                     && !widgets.is_empty()
                 {
-                    self.extensions.panels.insert(extension_id.clone(), widgets);
+                    self.extensions.set_panel(extension_id.clone(), widgets);
                     self.pending_extension_panel = Some(extension_id);
                 }
             }
@@ -1776,5 +1795,26 @@ mod tests {
             value: serde_json::json!([{ "kind": "heading", "text": "Hello" }]),
         });
         assert!(!model.extensions.errors.contains_key("demo"));
+    }
+
+    #[test]
+    fn every_panel_tree_bumps_its_revision() {
+        let mut model = AppModel::default();
+        assert_eq!(model.extensions.panel_revision("demo"), 0);
+        model.apply(BackendEvent::ExtensionResult {
+            call_id: "panel".into(),
+            extension_id: "demo".into(),
+            method: "panel".into(),
+            value: serde_json::json!([{ "kind": "heading", "text": "One" }]),
+        });
+        assert_eq!(model.extensions.panel_revision("demo"), 1);
+        model.apply(BackendEvent::ExtensionResult {
+            call_id: "panel-action".into(),
+            extension_id: "demo".into(),
+            method: "command".into(),
+            value: serde_json::json!([{ "kind": "heading", "text": "Two" }]),
+        });
+        assert_eq!(model.extensions.panel_revision("demo"), 2);
+        assert_eq!(model.extensions.panel_revision("other"), 0);
     }
 }

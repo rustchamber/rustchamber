@@ -235,6 +235,24 @@ is a table of the form fields. In a chat block, a button or a form sends its
 answer to the agent as a user message instead. Keep the tree small: it is
 redrawn on every refresh and tables show the first 200 rows.
 
+### Panels are responsive
+
+A panel must work at any width. It opens at the width its content needs, has a
+minimum of 320 points like the other panels, and grows only while the window
+allows. As soon as the user drags the divider, that width is theirs: the content
+must reflow instead of clipping.
+
+- Put button groups in `row { children, wrap = true }`. A row without `wrap`
+  still wraps when it no longer fits, but `wrap = true` states the intent.
+- Build from `stack`, full-width `card`, `text`, `key_value` and `list`. They
+  wrap naturally at narrow widths.
+- Do not assume pixels or a wide window. Check the tree mentally at 320 points:
+  one column, no fixed-width children, buttons that can share a line or stack.
+- Tables and code scroll horizontally and long text wraps, so leave them
+  full-width instead of forcing a width around them.
+- Avoid a row of many wide badges or stats; prefer a `stack` of `key_value`
+  rows or a table.
+
 ## Prefixes and text
 
 `mentions` returns rows like:

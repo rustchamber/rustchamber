@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Align, Layout, Margin, ScrollArea, Ui, Vec2};
 use rchamber_app::Action;
-use rchamber_ext::{BlockResponse, InstalledExtension};
+use rchamber_ext::{BlockResponse, InstalledExtension, Widget};
 
 use crate::app::RustChamber;
 use crate::blocks::{self, BlockHost};
@@ -138,18 +138,43 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                 );
                 ui.add_space(6.0);
             }
-            let Some(widgets) = app.model.extensions.panels.get(&id) else {
+            let Some(widgets) = app.model.extensions.panels.get(&id).cloned() else {
                 if error.is_none() {
                     loading(ui, &p);
                 }
                 return;
             };
+            if app.ui.zone == crate::surfaces::PanelZone::Right && !app.ui.expanded {
+                fit_width(ui, app, &id, &widgets);
+            }
             egui::Frame::new()
                 .inner_margin(Margin::symmetric(12, 10))
                 .show(ui, |ui| {
-                    blocks::show_widgets(ui, &widgets.clone(), &p, theme::TEXT_MARKDOWN);
+                    blocks::show_widgets(ui, &widgets, &p, theme::TEXT_MARKDOWN);
                 });
         });
+}
+
+const PANEL_CHROME: f32 = 50.0;
+
+fn fit_width(ui: &Ui, app: &mut RustChamber, id: &str, widgets: &[Widget]) {
+    if app.ui.extension_user_widths.contains(id) {
+        return;
+    }
+    let revision = app.model.extensions.panel_revision(id);
+    let slot = egui::Id::unique(("ext-panel-fit", id));
+    if ui
+        .ctx()
+        .data(|data| data.get_temp::<u64>(slot))
+        .is_some_and(|fitted| fitted == revision)
+    {
+        return;
+    }
+    let desired = (blocks::min_width(ui, widgets, theme::TEXT_MARKDOWN) + PANEL_CHROME)
+        .max(crate::app::ZONE_MIN);
+    app.ui.extension_widths.insert(id.to_string(), desired);
+    ui.ctx().data_mut(|data| data.insert_temp(slot, revision));
+    ui.ctx().request_repaint();
 }
 
 pub(crate) fn host_for(app: &RustChamber, id: &str) -> BlockHost {

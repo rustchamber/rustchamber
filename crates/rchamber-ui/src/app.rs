@@ -32,7 +32,7 @@ pub mod header;
 const SIDEBAR_MIN: f32 = 264.0;
 const SIDEBAR_MAX: f32 = 500.0;
 const RAIL_WIDTH: f32 = 44.0;
-const ZONE_MIN: f32 = 320.0;
+pub(crate) const ZONE_MIN: f32 = 320.0;
 const CHAT_MIN: f32 = 320.0;
 const BOTTOM_MIN: f32 = 160.0;
 const BOTTOM_CHAT_MIN: f32 = 200.0;
@@ -372,10 +372,24 @@ pub struct UiState {
     pub show_all_folders: HashSet<String>,
     pub add_project: crate::add_project::State,
     pub extension_panel: Option<String>,
+    pub extension_widths: HashMap<String, f32>,
+    pub extension_user_widths: HashSet<String>,
     pub pending_extension_install: Option<rchamber_ext::InstallLink>,
     pub extension_path: String,
     pub extension_approval: Option<String>,
     pub extension_remove: Option<String>,
+}
+
+impl UiState {
+    pub fn zone_width_for(&self, surface: Surface) -> f32 {
+        if surface == Surface::Extension
+            && let Some(id) = self.extension_panel.as_ref()
+            && let Some(width) = self.extension_widths.get(id)
+        {
+            return *width;
+        }
+        self.zone_width
+    }
 }
 
 pub struct RustChamber {
@@ -1558,13 +1572,14 @@ impl eframe::App for RustChamber {
         let expanded = self.ui.expanded && self.ui.context_open;
         let right_zone = self.ui.context_open && self.ui.zone == PanelZone::Right && !expanded;
         let bottom_zone = self.ui.context_open && self.ui.zone == PanelZone::Bottom && !expanded;
+        let zone_width = self.ui.zone_width_for(self.ui.surface);
         let mut target = solve_layout(
             width,
             sidebar_wanted,
             has_workspace,
             right_zone,
             sidebar_full,
-            self.ui.zone_width,
+            zone_width,
         );
         if right_zone && sidebar_wanted && target.sidebar == 0.0 {
             self.ui.sidebar_collapsed = true;
@@ -1575,7 +1590,7 @@ impl eframe::App for RustChamber {
                 has_workspace,
                 right_zone,
                 sidebar_full,
-                self.ui.zone_width,
+                zone_width,
             );
         } else if !right_zone && self.ui.sidebar_folded_by_zone {
             self.ui.sidebar_collapsed = false;
@@ -1586,7 +1601,7 @@ impl eframe::App for RustChamber {
                 has_workspace,
                 right_zone,
                 sidebar_full,
-                self.ui.zone_width,
+                zone_width,
             );
         }
         sidebar_wanted = !self.ui.sidebar_collapsed;
@@ -1858,11 +1873,19 @@ impl eframe::App for RustChamber {
                 .inner;
             if response.dragged() {
                 let ceiling = zone_ceiling(width - layout.rail);
-                self.ui.zone_width =
-                    (self.ui.zone_width - response.drag_delta().x).clamp(ZONE_MIN, ceiling);
+                let current = self.ui.zone_width_for(self.ui.surface);
+                let next = (current - response.drag_delta().x).clamp(ZONE_MIN, ceiling);
+                if self.ui.surface == Surface::Extension
+                    && let Some(id) = self.ui.extension_panel.clone()
+                {
+                    self.ui.extension_widths.insert(id.clone(), next);
+                    self.ui.extension_user_widths.insert(id);
+                } else {
+                    self.ui.zone_width = next;
+                }
             }
             self.ui.zone_dragging = response.dragged();
-            if response.drag_stopped() {
+            if response.drag_stopped() && self.ui.surface != Surface::Extension {
                 self.settings.zone_width = self.ui.zone_width;
                 self.settings.save();
             }
@@ -2012,6 +2035,21 @@ mod tests {
     fn zone_clamps_to_the_row_and_keeps_the_chat_minimum() {
         assert_eq!(plan(600.0, true, true), (0.0, 44.0, 236.0, 320.0));
         assert_eq!(plan(400.0, true, true), (0.0, 44.0, 36.0, 320.0));
+    }
+
+    #[test]
+    fn extension_surface_keeps_its_own_width() {
+        let mut ui = UiState {
+            zone_width: 400.0,
+            ..UiState::default()
+        };
+        ui.extension_panel = Some("deploys".into());
+        assert_eq!(ui.zone_width_for(Surface::Session), 400.0);
+        assert_eq!(ui.zone_width_for(Surface::Extension), 400.0);
+        ui.extension_widths.insert("deploys".into(), 560.0);
+        assert_eq!(ui.zone_width_for(Surface::Extension), 560.0);
+        ui.extension_panel = Some("other".into());
+        assert_eq!(ui.zone_width_for(Surface::Extension), 400.0);
     }
 
     #[test]
