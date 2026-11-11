@@ -20,7 +20,7 @@ description: |
   managed `opencode serve` process by default; the OpenCode CLI must be
   installed separately.
 vendor: RustChamber
-homepage: https://rustchamber.lipecode.com
+homepage: https://rustchamber.dev
 license: MIT
 provides:
   - rchamber

@@ -27,7 +27,7 @@
     </p>
   </description>
   <launchable type="desktop-id">dev.rustchamber.RustChamber.desktop</launchable>
-  <url type="homepage">https://rustchamber.lipecode.com</url>
+  <url type="homepage">https://rustchamber.dev</url>
   <url type="bugtracker">https://github.com/rustchamber/rustchamber/issues</url>
   <url type="vcs-browser">https://github.com/rustchamber/rustchamber</url>
   <categories>

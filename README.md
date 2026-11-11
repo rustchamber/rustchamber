@@ -12,7 +12,7 @@ terminal, files, changes, and git live in the same window, with a keyboard-first
 built for long sessions. Projects are explicit: a fresh install starts empty, and only the
 projects and sessions you create from RustChamber are shown.
 
-[rustchamber.lipecode.com](https://rustchamber.lipecode.com) — download, support, and roadmap.
+[rustchamber.dev](https://rustchamber.dev) — download, support, and roadmap.
 
 ![RustChamber home screen](docs/screenshots/home.png)
 
