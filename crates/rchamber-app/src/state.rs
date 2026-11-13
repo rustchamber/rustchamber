@@ -1135,10 +1135,7 @@ impl AppModel {
     }
 
     pub fn request_session_preview(&mut self, id: &str) -> bool {
-        if self.session_previews.contains_key(id) || !self.preview_pending.insert(id.to_string()) {
-            return false;
-        }
-        true
+        !self.session_previews.contains_key(id) && self.preview_pending.insert(id.to_string())
     }
 
     pub fn is_unread(&self, session: &Session) -> bool {

@@ -265,7 +265,7 @@ fn composer_width(bounds_width: f32) -> f32 {
     } else {
         (bounds_width * 0.025).clamp(COLUMN_PAD_MIN, COLUMN_PAD_MAX)
     };
-    (bounds_width - pad * 2.0).min(COLUMN_WIDTH).max(240.0)
+    (bounds_width - pad * 2.0).clamp(240.0, COLUMN_WIDTH)
 }
 
 fn queue_strip_height(app: &RustChamber, ctx: &egui::Context, key: &str, home: bool) -> f32 {

@@ -388,9 +388,7 @@ fn state_id() -> Id {
 }
 
 fn top_offset(screen_height: f32) -> f32 {
-    (screen_height * TOP_RATIO_MIN)
-        .min(TOP_OFFSET)
-        .max(PANEL_EDGE_GAP)
+    (screen_height * TOP_RATIO_MIN).clamp(PANEL_EDGE_GAP, TOP_OFFSET)
 }
 
 fn paint_card(ui: &Ui, rect: Rect, p: &Palette, shadow: &egui::epaint::Shadow) {
@@ -528,9 +526,7 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
         Pos2::new(rect.right() - GROUP_PAD_X, rect.bottom()),
     );
     let pressed = response.is_pointer_button_down_on();
-    let fill = if selected {
-        p.active
-    } else if pressed {
+    let fill = if selected || pressed {
         p.active
     } else if response.hovered() {
         p.hover
@@ -954,6 +950,6 @@ mod tests {
         assert_eq!(ITEM_HEIGHT, 32.0);
         assert_eq!(PANEL_MAX_WIDTH, 580.0);
         assert_eq!(CLOSE_CHIP, "ESC to close");
-        assert!(ROW_FONT > theme::TEXT_META);
+        const { assert!(ROW_FONT > theme::TEXT_META) };
     }
 }

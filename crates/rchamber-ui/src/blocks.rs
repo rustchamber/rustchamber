@@ -2431,8 +2431,6 @@ fn code_diff(ui: &mut Ui, p: &Palette, code: &str) {
             (p.diff_added, Some(p.diff_added_bg))
         } else if line.starts_with('-') {
             (p.diff_removed, Some(p.diff_removed_bg))
-        } else if line.starts_with("@@") {
-            (p.fg_muted, None)
         } else {
             (p.fg_muted, None)
         };

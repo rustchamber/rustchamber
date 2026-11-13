@@ -2014,8 +2014,6 @@ fn session_row(
 
     let fill = if active || selected {
         p.active
-    } else if pressed {
-        p.hover
     } else {
         p.hover
     };

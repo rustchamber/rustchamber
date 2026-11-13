@@ -169,15 +169,15 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
             any_staged,
             repo.is_some(),
         );
-        if let Some(next) = toolbar.scope {
-            if next != scope {
-                ui.memory_mut(|memory| memory.data.insert_temp(scope_id, next.index()));
-            }
+        if let Some(next) = toolbar.scope
+            && next != scope
+        {
+            ui.memory_mut(|memory| memory.data.insert_temp(scope_id, next.index()));
         }
-        if let Some(next) = toolbar.mode {
-            if next != mode {
-                ui.memory_mut(|memory| memory.data.insert_temp(mode_id, next.index()));
-            }
+        if let Some(next) = toolbar.mode
+            && next != mode
+        {
+            ui.memory_mut(|memory| memory.data.insert_temp(mode_id, next.index()));
         }
         if toolbar.stage {
             for file in &shown {
@@ -264,7 +264,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     }
 
     if !actions.is_empty() {
-        apply_actions(ui, app, repo.as_deref(), &mut actions);
+        apply_actions(ui, app, repo.as_deref(), &actions);
     }
 }
 
@@ -1382,6 +1382,8 @@ enum LineKind {
     Removed,
 }
 
+type Span = (usize, usize);
+
 #[derive(Clone)]
 struct Cell {
     old: Option<u32>,
@@ -1389,7 +1391,7 @@ struct Cell {
     sign: char,
     text: String,
     kind: LineKind,
-    emph: Option<(usize, usize)>,
+    emph: Option<Span>,
 }
 
 #[derive(Clone)]
@@ -1461,7 +1463,7 @@ fn expand_tabs(text: &str) -> String {
     text.replace('\t', "    ")
 }
 
-fn trim_span(chars: &[char], start: usize, end: usize) -> Option<(usize, usize)> {
+fn trim_span(chars: &[char], start: usize, end: usize) -> Option<Span> {
     let mut start = start;
     let mut end = end;
     while start < end && chars[start].is_whitespace() {
@@ -1473,7 +1475,7 @@ fn trim_span(chars: &[char], start: usize, end: usize) -> Option<(usize, usize)>
     (start < end).then_some((start, end))
 }
 
-fn intraline(removed: &str, added: &str) -> (Option<(usize, usize)>, Option<(usize, usize)>) {
+fn intraline(removed: &str, added: &str) -> (Option<Span>, Option<Span>) {
     let removed: Vec<char> = removed.chars().collect();
     let added: Vec<char> = added.chars().collect();
     let mut prefix = 0;
@@ -1726,14 +1728,14 @@ fn paint_cell(
         line_color(cell.kind, p),
     );
     let code_x = sign_x + SIGN_WIDTH + CODE_PAD;
-    if let Some((start, end)) = cell.emph {
-        if end > start {
-            let highlight = egui::Rect::from_min_max(
-                egui::Pos2::new(code_x + start as f32 * char_width, row.top() + 3.0),
-                egui::Pos2::new(code_x + end as f32 * char_width, row.bottom() - 3.0),
-            );
-            painter.rect_filled(highlight, CornerRadius::same(2), emph_color(cell.kind, p));
-        }
+    if let Some((start, end)) = cell.emph
+        && end > start
+    {
+        let highlight = egui::Rect::from_min_max(
+            egui::Pos2::new(code_x + start as f32 * char_width, row.top() + 3.0),
+            egui::Pos2::new(code_x + end as f32 * char_width, row.bottom() - 3.0),
+        );
+        painter.rect_filled(highlight, CornerRadius::same(2), emph_color(cell.kind, p));
     }
     painter.with_clip_rect(clip).text(
         egui::Pos2::new(code_x, center_y),

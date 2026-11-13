@@ -3521,7 +3521,7 @@ fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         value_row(ui, p, "Telemetry", "Off");
         value_row(ui, p, "Requests", "Direct to your providers");
         let data = crate::persist::path()
-            .and_then(|path| path.parent().map(|parent| home_relative(parent)))
+            .and_then(|path| path.parent().map(home_relative))
             .unwrap_or_else(|| "unavailable".into());
         value_row(ui, p, "Local data", &data);
         ui.add_space(8.0);

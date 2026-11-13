@@ -723,7 +723,7 @@ fn inline_pad(available: f32, wide: bool) -> f32 {
 fn column_geometry(available: f32, wide: bool) -> (f32, f32) {
     let available = available.max(0.0);
     let pad = inline_pad(available, wide).min(available * 0.5);
-    let inner = (available - 2.0 * pad).min(COLUMN_WIDTH).max(0.0);
+    let inner = (available - 2.0 * pad).clamp(0.0, COLUMN_WIDTH);
     let left = (available - inner) * 0.5;
     (left, inner)
 }
@@ -1854,7 +1854,7 @@ fn token_label(tokens: f64) -> String {
     let digits = value.to_string();
     let mut out = String::new();
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);

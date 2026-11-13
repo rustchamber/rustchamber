@@ -204,16 +204,14 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     } else {
         chip_room += CHIP_GAP + tag_width(ui, "Local-first workspace");
     }
-    let room = (cluster_left - left - ACTION_GAP * 1.5 - chip_room)
-        .max(40.0)
-        .min(520.0);
+    let room = (cluster_left - left - ACTION_GAP * 1.5 - chip_room).clamp(40.0, 520.0);
     let title_galley = elide(ui, title, theme::font_semibold(TITLE_SIZE), p.fg, room);
     let title_end = left + title_galley.size().x;
 
     let mut x = title_end;
     let mut chips: Vec<(Rect, String, bool)> = Vec::new();
-    if session.is_some() {
-        let label = format!("Session #{}", short_id(&session.as_ref().unwrap().0));
+    if let Some((id, _, _)) = session.as_ref() {
+        let label = format!("Session #{}", short_id(id));
         let width = tag_width(ui, &label);
         let rect = Rect::from_min_size(
             Pos2::new(x + CHIP_GAP, row.center().y - theme::TAG_HEIGHT * 0.5),
@@ -300,20 +298,19 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     for (rect, spec, opened) in tabs {
         let active = opened && app.ui.surface == spec.surface;
         let response = paint_tab(ui, &p, rect, &spec, active);
-        if response
+        let clicked = response
             .on_hover_text(match spec.surface {
                 Surface::Session => "Conversation".to_string(),
                 Surface::Changes => "Review working changes".to_string(),
                 _ => "Built-in terminal".to_string(),
             })
-            .clicked()
+            .clicked();
+        if clicked
+            && select_surface(&mut app.ui, spec.surface)
+            && spec.surface == Surface::Changes
+            && let Some(id) = app.model.active_id().map(str::to_string)
         {
-            if select_surface(&mut app.ui, spec.surface)
-                && spec.surface == Surface::Changes
-                && let Some(id) = app.model.active_id().map(str::to_string)
-            {
-                app.backend.send(Action::LoadDiff(id));
-            }
+            app.backend.send(Action::LoadDiff(id));
         }
     }
 }
