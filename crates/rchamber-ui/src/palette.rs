@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, EventFilter, Id, Key, Layout, Margin, Modifiers,
-    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2,
+    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2,
 };
 use rchamber_app::format::relative_time;
 use rchamber_app::{Action, Connection};
@@ -14,14 +14,18 @@ use crate::settings;
 use crate::surfaces::Surface;
 use crate::theme::{self, Palette};
 
-const PANEL_MAX_WIDTH: f32 = 720.0;
+const PANEL_MAX_WIDTH: f32 = 580.0;
 const PANEL_MIN_WIDTH: f32 = 200.0;
 const PANEL_EDGE_GAP: f32 = 16.0;
-const TOP_RATIO: f32 = 0.12;
-const INPUT_HEIGHT: f32 = 32.0;
-const LIST_MAX_HEIGHT: f32 = 440.0;
+const TOP_OFFSET: f32 = 72.0;
+const TOP_RATIO_MIN: f32 = 0.25;
+const INPUT_HEIGHT: f32 = 42.0;
+const CLOSE_CHIP: &str = "ESC to close";
+const ROW_FONT: f32 = 13.5;
+const KEYCAP_FONT: f32 = 11.0;
+const LIST_MAX_HEIGHT: f32 = 400.0;
 const LIST_HEIGHT_RATIO: f32 = 0.6;
-const ITEM_HEIGHT: f32 = 30.0;
+const ITEM_HEIGHT: f32 = 32.0;
 const ITEM_RADIUS: u8 = 9;
 const ITEM_PAD_X: f32 = 8.0;
 const GROUP_PAD_X: f32 = 8.0;
@@ -129,12 +133,22 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
     let width = (screen.width() - PANEL_EDGE_GAP * 2.0)
         .clamp(PANEL_MIN_WIDTH.min(screen.width()), PANEL_MAX_WIDTH)
         .min(screen.width());
-    let list_height = (screen.height() * LIST_HEIGHT_RATIO).min(LIST_MAX_HEIGHT);
-    let top = (screen.height() * TOP_RATIO).max(PANEL_EDGE_GAP);
-    let height = INPUT_HEIGHT + list_height + FOOTER_HEIGHT + theme::HAIRLINE;
+    let top = top_offset(screen.height());
 
     let groups = groups(app, &app.ui.palette_query);
     let total: usize = groups.iter().map(|group| group.items.len()).sum();
+    let list_content: f32 = groups
+        .iter()
+        .map(|group| GROUP_HEADING_HEIGHT + group.items.len() as f32 * ITEM_HEIGHT)
+        .sum::<f32>()
+        + GROUP_PAD_Y * 2.0
+        + 8.0;
+    let list_height = list_content.clamp(
+        ITEM_HEIGHT * 3.0,
+        (screen.height() * LIST_HEIGHT_RATIO).min(LIST_MAX_HEIGHT),
+    );
+    let height = INPUT_HEIGHT + list_height + FOOTER_HEIGHT;
+
     if total == 0 {
         app.ui.palette_index = 0;
     } else if app.ui.palette_index >= total {
@@ -182,7 +196,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         spread: 0,
         color: p.shadow,
     };
-    let backdrop = scale_alpha(p.overlay, 0.6 * t);
+    let backdrop = p.scrim();
     if backdrop.a() > 0 {
         egui::Area::new(Id::unique("palette/backdrop"))
             .order(egui::Order::Middle)
@@ -217,22 +231,21 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
             let field_id = Id::unique("palette/query");
             let (header, header_response) =
                 body.allocate_exact_size(Vec2::new(width, INPUT_HEIGHT), Sense::click());
-            icons::paint(
-                &body,
-                Icon::Search,
-                Rect::from_center_size(
-                    Pos2::new(header.left() + 20.0, header.center().y),
-                    Vec2::splat(16.0),
-                ),
-                scale_alpha(p.fg_muted, 0.5),
+            body.painter().text(
+                Pos2::new(header.left() + 16.0, header.center().y),
+                Align2::LEFT_CENTER,
+                "›",
+                theme::font(16.0),
+                p.primary,
             );
             if !state.focus_taken {
                 ctx.memory_mut(|memory| memory.request_focus(field_id));
                 state.focus_taken = true;
             }
+            let reserved = close_chip(&body, &p, header);
             let text_rect = Rect::from_min_max(
-                Pos2::new(header.left() + 36.0, header.top() + 4.0),
-                Pos2::new(header.right() - 12.0, header.bottom() - 4.0),
+                Pos2::new(header.left() + 32.0, header.top() + 4.0),
+                Pos2::new(header.right() - reserved, header.bottom() - 4.0),
             );
             let mut field = body.new_child(
                 UiBuilder::new()
@@ -245,11 +258,11 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                 .margin(Margin::ZERO)
                 .hint_text(
                     RichText::new("Search sessions, commands, settings…")
-                        .font(theme::font(theme::TEXT_META))
+                        .font(theme::font(14.0))
                         .color(p.fg_muted),
                 )
                 .text_color(p.fg)
-                .font(theme::font(theme::TEXT_META))
+                .font(theme::font(14.0))
                 .desired_width(f32::INFINITY);
             let edit_response = field.add(edit);
             if header_response.clicked() {
@@ -374,11 +387,23 @@ fn state_id() -> Id {
     Id::unique("palette/state")
 }
 
+fn top_offset(screen_height: f32) -> f32 {
+    (screen_height * TOP_RATIO_MIN)
+        .min(TOP_OFFSET)
+        .max(PANEL_EDGE_GAP)
+}
+
 fn paint_card(ui: &Ui, rect: Rect, p: &Palette, shadow: &egui::epaint::Shadow) {
     let corner = CornerRadius::same(theme::radius::XL);
     ui.painter()
         .add(egui::Shape::Rect(shadow.as_shape(rect, corner)));
-    ui.painter().rect_filled(rect, corner, p.bg);
+    ui.painter().rect_filled(rect, corner, p.card);
+    ui.painter().rect_stroke(
+        rect,
+        corner,
+        Stroke::new(theme::BORDER, p.border_hover),
+        StrokeKind::Inside,
+    );
 }
 
 fn presence(now: f64, opened_at: f64, closed_at: Option<f64>, duration: f32) -> f32 {
@@ -390,11 +415,6 @@ fn presence(now: f64, opened_at: f64, closed_at: Option<f64>, duration: f32) -> 
     let progress = (elapsed / duration).clamp(0.0, 1.0) as f32;
     let eased = motion::Easing::EaseOut.apply(progress);
     (from + (1.0 - 2.0 * from) * eased).clamp(0.0, 1.0)
-}
-
-fn scale_alpha(color: Color32, factor: f32) -> Color32 {
-    let [r, g, b, a] = color.to_srgba_unmultiplied();
-    Color32::from_rgba_unmultiplied(r, g, b, (a as f32 * factor.clamp(0.0, 1.0)) as u8)
 }
 
 fn wrap(index: usize, delta: i32, total: usize) -> usize {
@@ -419,6 +439,30 @@ fn entry_at(groups: &[Group], index: usize) -> Option<&Entry> {
 fn painter_hline(ui: &Ui, y: f32, left: f32, right: f32, color: Color32) {
     ui.painter()
         .hline(left..=right, y, Stroke::new(theme::BORDER, color));
+}
+
+fn close_chip(ui: &Ui, p: &Palette, header: Rect) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        CLOSE_CHIP.to_string(),
+        theme::font_mono(KEYCAP_FONT),
+        p.fg_muted,
+    );
+    let width = galley.size().x + 12.0;
+    let rect = Rect::from_min_size(
+        Pos2::new(
+            header.right() - 12.0 - width,
+            header.center().y - theme::TAG_HEIGHT * 0.5,
+        ),
+        Vec2::new(width, theme::TAG_HEIGHT),
+    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
+    ui.painter().galley(
+        Pos2::new(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        p.fg_muted,
+    );
+    width + 12.0
 }
 
 fn footer_hint(ui: &mut Ui, p: &Palette, keys: &str, label: &str) {
@@ -485,7 +529,7 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
     );
     let pressed = response.is_pointer_button_down_on();
     let fill = if selected {
-        p.selection
+        p.active
     } else if pressed {
         p.active
     } else if response.hovered() {
@@ -497,29 +541,36 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
         ui.painter()
             .rect_filled(row, CornerRadius::same(ITEM_RADIUS), fill);
     }
-    let left = row.left() + ITEM_PAD_X;
+    if selected {
+        ui.painter().rect_filled(
+            Rect::from_min_size(Pos2::new(row.left(), row.top() + 4.0), Vec2::new(2.0, row.height() - 8.0)),
+            CornerRadius::same(1),
+            p.primary,
+        );
+    }
+    let left = row.left() + ITEM_PAD_X + 2.0;
     let right = row.right() - ITEM_PAD_X;
     icons::paint(
         ui,
         entry.icon,
         Rect::from_center_size(Pos2::new(left + 8.0, row.center().y), Vec2::splat(16.0)),
-        p.fg_muted,
+        if selected { p.fg } else { p.fg_faint },
     );
     let text_left = left + 24.0;
     let shortcut = entry.shortcut.as_ref().map(|text| {
         ui.painter().layout_no_wrap(
             text.clone(),
-            theme::font(theme::TEXT_META),
+            theme::font_mono(KEYCAP_FONT),
             Color32::PLACEHOLDER,
         )
     });
     let shortcut_left = shortcut
         .as_ref()
-        .map(|galley| right - galley.size().x)
+        .map(|galley| right - galley.size().x - 6.0)
         .unwrap_or(right);
     let label = ui.painter().layout_no_wrap(
         entry.label.clone(),
-        theme::font(theme::TEXT_META),
+        theme::font(ROW_FONT),
         Color32::PLACEHOLDER,
     );
     let label_clip_right = (text_left + label.size().x)
@@ -529,15 +580,16 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
         Pos2::new(text_left, row.top()),
         Pos2::new(label_clip_right, row.bottom()),
     ));
+    let label_color = if selected { p.fg } else { p.fg_muted };
     label_painter.galley(
         Pos2::new(text_left, row.center().y - label.size().y / 2.0),
         label.clone(),
-        p.fg,
+        label_color,
     );
     if !entry.detail.is_empty() {
         let galley = ui.painter().layout_no_wrap(
             entry.detail.clone(),
-            theme::font(theme::TEXT_META),
+            theme::font(ROW_FONT),
             Color32::PLACEHOLDER,
         );
         let detail_right = shortcut_left - 8.0;
@@ -552,10 +604,16 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
         painter.galley(
             Pos2::new(detail_left, row.center().y - galley.size().y / 2.0),
             galley,
-            p.fg_muted,
+            p.fg_faint,
         );
     }
     if let Some(galley) = shortcut {
+        let cap = Rect::from_min_size(
+            Pos2::new(shortcut_left - 6.0, row.center().y - theme::TAG_HEIGHT * 0.5),
+            Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        );
+        ui.painter()
+            .rect_filled(cap, CornerRadius::same(theme::radius::XS), p.tag_bg);
         ui.painter().galley(
             Pos2::new(shortcut_left, row.center().y - galley.size().y / 2.0),
             galley,
@@ -869,5 +927,27 @@ fn execute(app: &mut RustChamber, command: Command, ctx: &egui::Context) {
         Command::Home => app.model.clear_active(),
         Command::OpenSession(id) => app.open_session(id),
         Command::OpenProject(directory) => app.set_workspace(directory),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_starts_at_the_designed_offset() {
+        assert_eq!(top_offset(900.0), TOP_OFFSET);
+        assert_eq!(top_offset(1440.0), TOP_OFFSET);
+        assert_eq!(top_offset(200.0), 50.0);
+        assert_eq!(top_offset(0.0), PANEL_EDGE_GAP);
+    }
+
+    #[test]
+    fn palette_matches_the_mock_metrics() {
+        assert_eq!(INPUT_HEIGHT, 42.0);
+        assert_eq!(ITEM_HEIGHT, 32.0);
+        assert_eq!(PANEL_MAX_WIDTH, 580.0);
+        assert_eq!(CLOSE_CHIP, "ESC to close");
+        assert!(ROW_FONT > theme::TEXT_META);
     }
 }

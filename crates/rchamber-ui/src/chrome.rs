@@ -78,10 +78,10 @@ pub fn sidebar_strip(ui: &mut Ui) {
         ui.scope_id().with("sidebar-strip"),
         Sense::click_and_drag(),
     );
-    drag_window(ui, &response);
+    drag_window(ui, &response, true);
 }
 
-pub fn header_drag(ui: &mut Ui, right_limit: f32) {
+pub fn header_drag(ui: &mut Ui, right_limit: f32, block: Rect) {
     let rect = ui.max_rect();
     let rect = Rect::from_min_max(
         rect.min,
@@ -90,23 +90,44 @@ pub fn header_drag(ui: &mut Ui, right_limit: f32) {
             rect.bottom(),
         ),
     );
-    let response = ui.interact(
+    let base = ui.interact(
         rect,
         ui.scope_id().with("titlebar-drag"),
         Sense::click_and_drag(),
     );
-    drag_window(ui, &response);
+    drag_window(ui, &base, false);
+
+    let gap = 8.0;
+    let strips = [
+        Rect::from_min_max(
+            rect.min,
+            egui::Pos2::new((block.left() - gap).max(rect.left()), rect.bottom()),
+        ),
+        Rect::from_min_max(
+            egui::Pos2::new(
+                (block.right() + gap).min(rect.right()),
+                rect.top(),
+            ),
+            rect.max,
+        ),
+    ];
+    for (index, strip) in strips.iter().enumerate() {
+        if strip.width() < 2.0 {
+            continue;
+        }
+        let response = ui.interact(
+            *strip,
+            ui.scope_id().with(("titlebar-drag-empty", index)),
+            Sense::click_and_drag(),
+        );
+        drag_window(ui, &response, true);
+    }
 }
 
 pub fn titlebar_controls(ctx: &egui::Context, app: &mut RustChamber, p: &Palette) {
     let x = start_inset(ctx);
     let y = (HEADER_HEIGHT * 0.5 - CONTROLS_SIZE * 0.5).round();
     let open = !app.ui.sidebar_collapsed;
-    let cap = if open {
-        (app.settings.sidebar_width.clamp(264.0, 500.0) - x - END_PAD).max(CONTROLS_SIZE)
-    } else {
-        f32::INFINITY
-    };
     let mut toggle = false;
     let mut create = false;
     egui::Area::new(egui::Id::unique("titlebar-controls"))
@@ -119,16 +140,13 @@ pub fn titlebar_controls(ctx: &egui::Context, app: &mut RustChamber, p: &Palette
                 toggle = button
                     .on_hover_text(format!("Toggle sidebar ({})", shortcut("B")))
                     .clicked();
-                let room = (cap - CONTROLS_SIZE - CLUSTER_GAP).max(CONTROLS_SIZE);
-                let label = open.then_some(NEW_SESSION_LABEL);
-                let button = control(ui, p, Icon::Plus, label, false, room);
-                create = if open {
-                    button.clicked()
-                } else {
-                    button
+                if !open {
+                    let room = CONTROLS_SIZE;
+                    let button = control(ui, p, Icon::Plus, None, false, room);
+                    create = button
                         .on_hover_text(format!("New session ({})", shortcut("N")))
-                        .clicked()
-                };
+                        .clicked();
+                }
             });
         });
     if toggle {
@@ -204,11 +222,11 @@ pub fn place_traffic_lights(frame: &eframe::Frame, ctx: &egui::Context) {
     frame.set_traffic_lights_position(ctx, Rangef::new(0.0, HEADER_HEIGHT), TRAFFIC_LIGHTS_LEFT);
 }
 
-fn drag_window(ui: &Ui, response: &egui::Response) {
+fn drag_window(ui: &Ui, response: &egui::Response, allow_maximize: bool) {
     if response.drag_started_by(egui::PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
-    if response.double_clicked_by(egui::PointerButton::Primary) {
+    if allow_maximize && response.double_clicked_by(egui::PointerButton::Primary) {
         let maximized = ui
             .ctx()
             .input(|input| input.viewport().maximized.unwrap_or(false));

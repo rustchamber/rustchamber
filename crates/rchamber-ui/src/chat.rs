@@ -22,16 +22,16 @@ use crate::markdown::Markdown;
 use crate::motion;
 use crate::theme::{self, Palette};
 
-const COLUMN_WIDTH: f32 = 768.0;
+const COLUMN_WIDTH: f32 = 760.0;
 const USER_BUBBLE_MAX: f32 = 0.85;
-const USER_PAD_X: f32 = 20.0;
-const USER_PAD_Y: f32 = 12.0;
-const TEXT_USER: f32 = 16.0;
-const ACTIONS_ROW: f32 = 34.0;
-const ACTION_SIZE: f32 = 26.0;
-const ACTION_ICON: f32 = 13.0;
-const ROW_HEIGHT: f32 = 36.0;
-const ROW_HEIGHT_NARROW: f32 = 32.0;
+const USER_PAD_X: f32 = 14.0;
+const USER_PAD_Y: f32 = 10.0;
+const TEXT_USER: f32 = theme::TEXT_MARKDOWN;
+const ACTIONS_ROW: f32 = 22.0;
+const ACTION_SIZE: f32 = 22.0;
+const ACTION_ICON: f32 = 12.0;
+const ROW_HEIGHT: f32 = 28.0;
+const ROW_HEIGHT_NARROW: f32 = 28.0;
 const ROW_WIDE_MIN: f32 = 640.0;
 const ROW_ICON: f32 = 14.0;
 const ROW_GAP: f32 = 6.0;
@@ -42,11 +42,14 @@ const FOLD_TITLE: f32 = theme::TEXT_UI_LABEL;
 const FOLD_HEIGHT: f32 = 28.0;
 const FOLD_ROWS: usize = 7;
 const DISCLOSURE: f32 = 0.2;
+const REASONING_ROW: f32 = 26.0;
+const REASONING_INDENT: f32 = 12.0;
+const REASONING_BAR: f32 = 2.0;
 const REASONING_RISE: f32 = 4.0;
 const REASONING_RISE_TIME: f32 = 0.180;
 const REASONING_MAX: f32 = 320.0;
 const OUTPUT_MAX: f32 = 320.0;
-const DIFF_LINE: f32 = 24.0;
+const DIFF_LINE: f32 = 22.0;
 const EDGE_FADE: f32 = 48.0;
 const COMPOSER_FADE: f32 = 64.0;
 const REARM: f32 = 40.0;
@@ -287,15 +290,9 @@ struct Dock {
 
 fn dock_metrics(ctx: &egui::Context, session_id: &str, area: Rect) -> Dock {
     let reserved = composer::reserved_height(ctx, session_id, false);
-    let column = area.width().min(COLUMN_WIDTH);
-    let pad = if area.width() >= 1024.0 {
-        (area.width() * 0.03).clamp(16.0, 24.0)
-    } else {
-        (area.width() * 0.025).clamp(12.0, 16.0)
-    };
-    let width = (column - pad * 2.0).max(240.0);
+    let (left, _) = column_geometry(area.width(), wide_layout(ctx));
     Dock {
-        left: area.center().x - width * 0.5,
+        left: area.left() + left,
         top: (composer_top(area.bottom(), reserved) - PILL_GAP).max(area.top()),
     }
 }
@@ -359,6 +356,7 @@ fn transcript(
 
     let mut load_older = false;
     let mut open_file: Option<String> = None;
+    let mut approvals: Vec<Action> = Vec::new();
     let mut md = std::mem::take(&mut app.md);
 
     if let Some(timeline) = &held {
@@ -415,6 +413,11 @@ fn transcript(
                     ui.add_space(12.0);
                     error_card(ui, p, &mut md, Some("Run failed"), error);
                 }
+                let pending = &chat.pending;
+                for (index, request) in pending.iter().take(2).enumerate() {
+                    ui.add_space(12.0);
+                    approval_card(ui, p, request, index, pending.len(), &mut approvals);
+                }
                 tail_space(ui, session_id, area_rect, busy);
                 if pinned {
                     ui.scroll_to_cursor_animation(
@@ -427,6 +430,10 @@ fn transcript(
     };
 
     app.md = md;
+
+    for action in approvals {
+        app.backend.send(action);
+    }
 
     let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
     let offset = output.state.clamped_offset().y;
@@ -715,10 +722,9 @@ fn inline_pad(available: f32, wide: bool) -> f32 {
 
 fn column_geometry(available: f32, wide: bool) -> (f32, f32) {
     let available = available.max(0.0);
-    let outer = available.min(COLUMN_WIDTH);
-    let pad = inline_pad(available, wide).min(outer * 0.5);
-    let inner = (outer - 2.0 * pad).max(0.0);
-    let left = (available - outer) * 0.5 + pad;
+    let pad = inline_pad(available, wide).min(available * 0.5);
+    let inner = (available - 2.0 * pad).min(COLUMN_WIDTH).max(0.0);
+    let left = (available - inner) * 0.5;
     (left, inner)
 }
 
@@ -918,7 +924,11 @@ fn turn_view(
 #[derive(Clone, Copy)]
 enum Activity<'a> {
     Text(&'a str),
-    Reasoning { text: &'a str, streaming: bool },
+    Reasoning {
+        text: &'a str,
+        streaming: bool,
+        seconds: Option<f64>,
+    },
     Tool(&'a ToolPart),
 }
 
@@ -926,6 +936,12 @@ fn activity_rows<'a>(turn: &Turn<'a>, answer: Option<usize>) -> Vec<Activity<'a>
     let mut rows = Vec::new();
     for (index, step) in turn.steps.iter().enumerate() {
         let streaming = step.time.completed.is_none();
+        let seconds = match step.time.completed {
+            Some(completed) if completed > step.time.created && step.time.created > 0.0 => {
+                Some((completed - step.time.created) / 1000.0)
+            }
+            _ => None,
+        };
         for part in &step.content {
             match part {
                 Part::Text(text) => {
@@ -941,6 +957,7 @@ fn activity_rows<'a>(turn: &Turn<'a>, answer: Option<usize>) -> Vec<Activity<'a>
                     rows.push(Activity::Reasoning {
                         text: &reasoning.text,
                         streaming,
+                        seconds,
                     });
                 }
                 Part::Tool(tool) => {
@@ -1114,11 +1131,25 @@ fn activity_fold(
                     );
                     ui.add_space(4.0);
                 }
-                Activity::Reasoning { text, streaming } => {
-                    reasoning_row(ui, p, md, id.with(("reasoning", index)), text, *streaming);
+                Activity::Reasoning {
+                    text,
+                    streaming,
+                    seconds,
+                } => {
+                    reasoning_row(
+                        ui,
+                        p,
+                        md,
+                        id.with(("reasoning", index)),
+                        text,
+                        *streaming,
+                        *seconds,
+                    );
                 }
                 Activity::Tool(tool) => {
+                    ui.add_space(3.0);
                     tool_row(ui, p, md, tool, open_file);
+                    ui.add_space(3.0);
                 }
             }
         }
@@ -1311,13 +1342,8 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
     let inner_width = (max - 2.0 * USER_PAD_X - 2.0).max(40.0);
     let frame = egui::Frame::new()
         .fill(p.user_bg)
-        .stroke(Stroke::new(theme::BORDER, p.alpha(p.primary, 13)))
-        .corner_radius(CornerRadius {
-            nw: theme::radius::XL,
-            ne: theme::radius::XL,
-            sw: theme::radius::XL,
-            se: theme::radius::XS,
-        })
+        .stroke(Stroke::new(theme::BORDER, p.accent_border))
+        .corner_radius(CornerRadius::same(theme::radius::XL))
         .inner_margin(Margin {
             left: USER_PAD_X as i8,
             right: USER_PAD_X as i8,
@@ -1328,7 +1354,7 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
         .with_layout(Layout::right_to_left(Align::TOP), |ui| {
             frame
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
                     if long {
                         ui.set_width(inner_width);
                     } else {
@@ -1347,14 +1373,13 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
                         }
                     } else {
                         ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+                            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
                             ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+                                ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
                                 for file in &user.files {
                                     file_chip(ui, p, file);
                                 }
                             });
-                            ui.add_space(8.0);
                             if !user.text.is_empty() {
                                 user_markdown(
                                     ui,
@@ -1414,7 +1439,7 @@ fn user_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, user: &UserMessage) -> 
 
         let time = time_label(user.time.created);
         if !time.is_empty() {
-            let font = theme::font(theme::TEXT_META);
+            let font = theme::font_mono(theme::TEXT_MICRO);
             let galley = ui.painter().layout_no_wrap(time, font, color);
             let right = copy.left() - 4.0;
             let text_left = right - galley.size().x;
@@ -1440,26 +1465,45 @@ fn file_chip(ui: &mut Ui, p: &Palette, file: &Attachment) {
         .clone()
         .or_else(|| file.path.clone())
         .unwrap_or_else(|| "attachment".into());
-    let font = theme::font(ROW_TEXT);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(shorten(&name, 40), font, p.fg_muted);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(galley.size().x + 28.0, 28.0), Sense::hover());
+    let font = theme::font_mono(theme::TEXT_MICRO);
+    let galley = ui.painter().layout_no_wrap(
+        format!("@{}", shorten(&name, 40)),
+        font,
+        p.primary_text,
+    );
+    let width = 8.0 + 12.0 + 5.0 + galley.size().x + 5.0 + 10.0 + 7.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::hover());
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::radius::TABLE), tile_fill(p));
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.raised_fill());
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(theme::radius::XS),
+        Stroke::new(theme::BORDER, p.border),
+        StrokeKind::Inside,
+    );
     icons::paint(
         ui,
-        Icon::Paperclip,
+        Icon::File,
         Rect::from_center_size(
-            Pos2::new(rect.left() + 8.0 + 7.0, rect.center().y),
-            Vec2::splat(14.0),
+            Pos2::new(rect.left() + 8.0 + 6.0, rect.center().y),
+            Vec2::splat(12.0),
         ),
         p.fg_muted,
     );
+    let text_left = rect.left() + 8.0 + 12.0 + 5.0;
     ui.painter().galley(
-        Pos2::new(rect.left() + 26.0, rect.center().y - galley.size().y * 0.5),
+        Pos2::new(text_left, rect.center().y - galley.size().y * 0.5),
         galley,
-        p.fg_muted,
+        p.primary_text,
+    );
+    icons::paint(
+        ui,
+        Icon::Close,
+        Rect::from_center_size(
+            Pos2::new(rect.right() - 8.0 - 5.0, rect.center().y),
+            Vec2::splat(9.0),
+        ),
+        p.fg_faint,
     );
 }
 
@@ -1471,9 +1515,9 @@ fn message_footer(
     body: Rect,
 ) {
     let id = Id::unique(("message-footer", assistant.id.as_str()));
-    ui.add_space(8.0);
+    ui.add_space(6.0);
     let (row, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), ACTION_SIZE), Sense::hover());
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), ACTIONS_ROW), Sense::hover());
     let pointer = ui.ctx().pointer_hover_pos();
     let region = body.union(row);
     let hovered = pointer
@@ -1481,15 +1525,6 @@ fn message_footer(
         .unwrap_or(false);
     let reveal = motion::hover_fade(ui, id.with("reveal"), hovered);
 
-    let model = assistant
-        .model
-        .as_ref()
-        .map(|model| display_model(&model.id))
-        .filter(|model| !model.is_empty());
-    let agent = assistant
-        .agent
-        .clone()
-        .filter(|agent| !agent.trim().is_empty());
     let started = turn
         .user
         .map(|user| user.time.created)
@@ -1500,71 +1535,42 @@ fn message_footer(
         }
         _ => None,
     };
+    let tokens = assistant
+        .tokens
+        .as_ref()
+        .map(|usage| usage.total())
+        .filter(|total| *total > 0.0);
 
+    let font = theme::font_mono(theme::TEXT_MICRO);
     let mut x = row.left();
-    let font = theme::font(theme::TEXT_META);
-    let separator = |ui: &Ui, x: &mut f32| {
-        let galley = ui.painter().layout_no_wrap(
-            "·".to_string(),
-            font.clone(),
-            p.fg_muted.gamma_multiply(0.6),
-        );
-        let width = galley.size().x;
-        ui.painter().galley(
-            Pos2::new(*x + 6.0, row.center().y - galley.size().y * 0.5),
-            galley,
-            p.fg_muted.gamma_multiply(0.6),
-        );
-        *x += 6.0 + width + 6.0;
-    };
-
-    if let Some(model) = &model {
-        let icon = Rect::from_center_size(Pos2::new(x + 6.5, row.center().y), Vec2::splat(13.0));
-        icons::paint(ui, Icon::Bot, icon, p.fg_muted);
-        x += 13.0 + 6.0;
-        let galley = row_galley(
-            ui,
-            model,
-            font.clone(),
-            p.fg_muted,
-            (row.width() * 0.5).max(60.0),
-        );
-        let width = galley.size().x;
-        ui.painter().galley(
-            Pos2::new(x, row.center().y - galley.size().y * 0.5),
-            galley,
-            p.fg_muted,
-        );
-        x += width;
-    }
-    if let Some(agent) = &agent {
-        if model.is_some() {
-            separator(ui, &mut x);
-        }
-        let galley = row_galley(
-            ui,
-            agent,
-            font.clone(),
-            p.fg_muted,
-            (row.width() * 0.3).max(60.0),
-        );
-        let width = galley.size().x;
-        ui.painter().galley(
-            Pos2::new(x, row.center().y - galley.size().y * 0.5),
-            galley,
-            p.fg_muted,
-        );
-        x += width;
-    }
     if let Some(duration) = &duration {
-        if model.is_some() || agent.is_some() {
-            separator(ui, &mut x);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(duration.clone(), font.clone(), p.fg_muted);
+        ui.painter().galley(
+            Pos2::new(x, row.center().y - galley.size().y * 0.5),
+            galley.clone(),
+            p.fg_muted,
+        );
+        x += galley.size().x;
+    }
+    if let Some(tokens) = tokens {
+        if x > row.left() {
+            let dot = ui
+                .painter()
+                .layout_no_wrap("·".to_string(), font.clone(), p.fg_faint);
+            ui.painter().galley(
+                Pos2::new(x + 6.0, row.center().y - dot.size().y * 0.5),
+                dot.clone(),
+                p.fg_faint,
+            );
+            x += 6.0 + dot.size().x + 6.0;
         }
-        ui.painter().text(
-            Pos2::new(x, row.center().y),
-            Align2::LEFT_CENTER,
-            duration,
-            font.clone(),
+        let label = format!("{} tok", token_label(tokens));
+        let galley = ui.painter().layout_no_wrap(label, font, p.fg_muted);
+        ui.painter().galley(
+            Pos2::new(x, row.center().y - galley.size().y * 0.5),
+            galley,
             p.fg_muted,
         );
     }
@@ -1593,17 +1599,51 @@ fn message_footer(
                 p.fg_muted.gamma_multiply(reveal)
             },
         );
-        if response.clicked() {
+        if response
+            .on_hover_text("Copy the answer")
+            .clicked()
+        {
             let text = turn_text(turn);
             if !text.is_empty() {
                 ui.ctx().copy_text(text);
             }
         }
-    }
 
-    if reveal > 0.001 {
+        let apply = Rect::from_min_size(
+            Pos2::new(row.right() - ACTION_SIZE - 4.0 - ACTION_SIZE, row.top()),
+            Vec2::splat(ACTION_SIZE),
+        );
+        let response = ui.interact(apply, id.with("apply-all"), Sense::click());
+        crate::widgets::pointer(ui, &response);
+        if response.hovered() {
+            ui.painter().rect_filled(
+                apply,
+                CornerRadius::same(theme::radius::SM),
+                p.hover.gamma_multiply(reveal),
+            );
+        }
+        icons::paint(
+            ui,
+            Icon::Diff,
+            Rect::from_center_size(apply.center(), Vec2::splat(ACTION_ICON)),
+            if response.hovered() {
+                p.fg.gamma_multiply(reveal)
+            } else {
+                p.fg_muted.gamma_multiply(reveal)
+            },
+        );
+        if response.on_hover_text("Copy all changes").clicked() {
+            let patch = turn_patch(turn);
+            if !patch.is_empty() {
+                ui.ctx().copy_text(patch);
+            }
+        }
+
         let quote = Rect::from_min_size(
-            Pos2::new(row.right() - 4.0 - ACTION_SIZE * 3.0, row.top()),
+            Pos2::new(
+                row.right() - ACTION_SIZE * 2.0 - 8.0 - ACTION_SIZE,
+                row.top(),
+            ),
             Vec2::splat(ACTION_SIZE),
         );
         let response = ui.interact(quote, id.with("quote"), Sense::click());
@@ -1653,7 +1693,7 @@ fn message_footer(
         && reveal > 0.001
     {
         let more = Rect::from_min_size(
-            Pos2::new(row.right() - 4.0 - ACTION_SIZE * 2.0, row.top()),
+            Pos2::new(row.right() - ACTION_SIZE * 3.0 - 12.0, row.top()),
             Vec2::splat(ACTION_SIZE),
         );
         let response = ui.interact(more, id.with("more"), Sense::click());
@@ -1814,6 +1854,43 @@ fn turn_duration(ms: f64) -> String {
     }
 }
 
+fn token_label(tokens: f64) -> String {
+    let value = tokens.round().max(0.0) as i64;
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn turn_patch(turn: &Turn<'_>) -> String {
+    let mut out = String::new();
+    for step in &turn.steps {
+        for part in &step.content {
+            let Part::Tool(tool) = part else {
+                continue;
+            };
+            for (path, patch) in tool_patches(tool) {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                if !path.is_empty() {
+                    out.push_str(&format!("--- {path}\n+++ {path}\n"));
+                }
+                out.push_str(&patch);
+                if !patch.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
 fn display_model(id: &str) -> String {
     let tail = id.rsplit('/').next().unwrap_or(id);
     let mut name = tail.to_string();
@@ -1830,7 +1907,15 @@ fn reasoning_open(touched: bool, user_open: bool, streaming: bool) -> bool {
     if touched { user_open } else { streaming }
 }
 
-fn reasoning_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, id: Id, text: &str, streaming: bool) {
+fn reasoning_row(
+    ui: &mut Ui,
+    p: &Palette,
+    md: &mut Markdown,
+    id: Id,
+    text: &str,
+    streaming: bool,
+    seconds: Option<f64>,
+) {
     let touched = ui
         .memory(|memory| memory.data.get_temp::<bool>(id.with("touched")))
         .unwrap_or(false);
@@ -1838,20 +1923,63 @@ fn reasoning_row(ui: &mut Ui, p: &Palette, md: &mut Markdown, id: Id, text: &str
         .memory(|memory| memory.data.get_temp::<bool>(id.with("user")))
         .unwrap_or(false);
     let mut open = reasoning_open(touched, user_open, streaming);
-    let summary = first_line(text, 80);
-    let response = disclosure_row(
+    let summary = first_line(text, 96);
+    let mut label = if streaming {
+        "Thinking".to_string()
+    } else {
+        match seconds {
+            Some(seconds) if seconds >= 0.1 => format!("Thought for {seconds:.1}s"),
+            _ => "Thought".to_string(),
+        }
+    };
+    if !summary.is_empty() && !streaming {
+        label.push_str(" — ");
+        label.push_str(&summary);
+    }
+
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), REASONING_ROW), Sense::click());
+    let center = rect.center().y;
+    icons::paint(
         ui,
-        p,
-        id,
-        Icon::Bot,
-        p.tool_title,
-        p.tool_icon,
-        "Thinking",
-        if streaming { "" } else { summary.as_str() },
-        open,
-        streaming,
-        "",
+        if open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        Rect::from_center_size(Pos2::new(rect.left() + 5.0, center), Vec2::splat(12.0)),
+        p.fg_faint,
     );
+    let mut x = rect.left() + 12.0 + 6.0;
+    if streaming {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label, theme::font(12.5), p.fg_muted);
+        let width = galley.size().x;
+        ui.painter().galley(
+            Pos2::new(x, center - galley.size().y * 0.5),
+            galley,
+            p.fg_muted,
+        );
+        x += width + 4.0;
+        busy_dots(ui, Pos2::new(x, center), p.fg_muted);
+    } else {
+        let galley = row_galley(
+            ui,
+            &label,
+            theme::font(12.5),
+            p.fg_muted,
+            (rect.right() - x).max(20.0),
+        );
+        ui.painter().galley(
+            Pos2::new(x, center - galley.size().y * 0.5),
+            galley,
+            p.fg_muted,
+        );
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     if response.clicked() {
         open = !open;
         ui.memory_mut(|memory| {
@@ -1869,11 +1997,12 @@ fn reasoned_body(ui: &mut Ui, p: &Palette, md: &mut Markdown, id: Id, text: &str
     let lift = REASONING_RISE * (1.0 - rise);
     let content = collapsible_body(ui, id.with("body"), open, Some(rise), |ui| {
         ui.add_space(4.0);
+        let left = REASONING_BAR + REASONING_INDENT;
         let mut body = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(Rect::from_min_size(
-                    Pos2::new(start.x + 20.0, start.y + 4.0 - lift),
-                    Vec2::new((width - 20.0).max(40.0), 1.0e5),
+                    Pos2::new(start.x + left, start.y + 4.0 - lift),
+                    Vec2::new((width - left).max(40.0), 1.0e5),
                 ))
                 .layout(Layout::top_down(Align::Min)),
         );
@@ -1882,16 +2011,19 @@ fn reasoned_body(ui: &mut Ui, p: &Palette, md: &mut Markdown, id: Id, text: &str
             .max_height(REASONING_MAX)
             .auto_shrink([false, true])
             .show(&mut body, |ui| {
-                md.show_at(ui, id.with("md"), text, p);
+                md.show_at_sized(ui, id.with("md"), text, 12.5, 20.0, p.fg_muted, p);
             });
         ui.advance_cursor_after_rect(body.min_rect());
         ui.add_space(8.0);
     });
     if content > 0.5 {
-        ui.painter().vline(
-            start.x + 8.0,
-            start.y..=(start.y + content),
-            Stroke::new(theme::BORDER, p.border_soft),
+        ui.painter().rect_filled(
+            Rect::from_min_size(
+                Pos2::new(start.x + 1.0, start.y),
+                Vec2::new(REASONING_BAR, content),
+            ),
+            CornerRadius::same(1),
+            p.border,
         );
     }
 }
@@ -2609,17 +2741,32 @@ fn tool_row(
         Vec2::new(ui.available_width(), row_height_of(ui)),
         Sense::click(),
     );
-    let center = rect.center().y;
     let hover = motion::Animated::from_id(id.with("hover"))
         .with_duration(motion::HOVER)
         .bool(ui.ctx(), response.hovered() || open);
 
+    let border = if error {
+        p.error_border
+    } else if running {
+        p.accent_border
+    } else {
+        p.border
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.card);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(theme::radius::MD),
+        Stroke::new(theme::BORDER, border),
+        StrokeKind::Inside,
+    );
+
+    let center = rect.center().y;
     let icon_rect = Rect::from_center_size(
-        Pos2::new(rect.left() + 1.0 + ROW_ICON * 0.5, center),
+        Pos2::new(rect.left() + 10.0 + 7.0, center),
         Vec2::splat(ROW_ICON),
     );
-    let icon_color = if error { p.red } else { p.tool_icon };
-    if hover < 0.999 {
+    if hover < 0.999 && !open {
         icons::paint(
             ui,
             renderer
@@ -2628,10 +2775,15 @@ fn tool_row(
                 .map(extension_icon)
                 .unwrap_or_else(|| tool_icon(&tool.name)),
             icon_rect,
-            icon_color.gamma_multiply(1.0 - hover),
+            if error {
+                p.error_text
+            } else {
+                p.tool_icon
+            }
+            .gamma_multiply(1.0 - hover),
         );
     }
-    if hover > 0.001 {
+    if hover > 0.001 || open {
         icons::paint(
             ui,
             if open {
@@ -2640,11 +2792,16 @@ fn tool_row(
                 Icon::ChevronRight
             },
             icon_rect,
-            p.tool_description.gamma_multiply(hover),
+            if error {
+                p.error_text
+            } else {
+                p.tool_icon
+            }
+            .gamma_multiply(if open { 1.0 } else { hover }),
         );
     }
 
-    let title_color = if error { p.red } else { p.tool_title };
+    let title_color = if error { p.error_text } else { p.tool_title };
     let title = renderer
         .as_ref()
         .and_then(|renderer| renderer.title.as_deref())
@@ -2652,82 +2809,137 @@ fn tool_row(
         .filter(|title| !title.trim().is_empty())
         .or_else(|| renderer.as_ref().and_then(|renderer| renderer.name.clone()))
         .unwrap_or_else(|| tool_label(&tool.name).to_string());
-    let title_galley =
-        ui.painter()
-            .layout_no_wrap(title, theme::font_medium(ROW_TITLE), title_color);
-    let mut x = icon_rect.right() + ROW_GAP;
-    let title_width = title_galley.size().x.min(rect.width() * 0.45);
+    let title_galley = row_galley(
+        ui,
+        &title,
+        theme::font_semibold(ROW_TITLE),
+        title_color,
+        (rect.width() * 0.45).max(80.0),
+    );
+    let mut x = icon_rect.right() + 7.0;
     ui.painter().galley(
         Pos2::new(x, center - title_galley.size().y * 0.5),
-        title_galley,
+        title_galley.clone(),
         title_color,
     );
-    x += title_width;
+    x += title_galley.size().x;
+
+    let description = tool_description(tool, error, renderer.as_ref());
+    let (additions, deletions) = tool_patch_total(tool);
+    let duration_text = tool_duration(tool);
+
+    let check = Rect::from_center_size(
+        Pos2::new(rect.right() - 10.0 - 6.0, center),
+        Vec2::splat(12.0),
+    );
+    let status_ink = if error { p.error_text } else { p.green };
+    if running {
+        busy_dots(ui, Pos2::new(check.left() - 16.0, center), p.primary);
+    } else if error {
+        icons::paint(ui, Icon::Warning, check, status_ink);
+    } else if status == ToolStatus::Done {
+        icons::paint(ui, Icon::Check, check, status_ink);
+    }
+
+    let mut right = check.left() - 6.0;
+    let mono = theme::font_mono(11.5);
+    if additions + deletions > 0 {
+        let dels = ui.painter().layout_no_wrap(
+            format!("-{deletions}"),
+            mono.clone(),
+            p.diff_removed,
+        );
+        right -= dels.size().x;
+        ui.painter().galley(
+            Pos2::new(right, center - dels.size().y * 0.5),
+            dels.clone(),
+            p.diff_removed,
+        );
+        right -= 4.0;
+        let adds =
+            ui.painter()
+                .layout_no_wrap(format!("+{additions}"), mono.clone(), p.diff_added);
+        right -= adds.size().x;
+        ui.painter().galley(
+            Pos2::new(right, center - adds.size().y * 0.5),
+            adds.clone(),
+            p.diff_added,
+        );
+        right -= 6.0;
+    } else if !duration_text.is_empty() {
+        let color = if running {
+            p.primary_text
+        } else if error {
+            p.error_text
+        } else {
+            p.tool_description
+        };
+        let galley =
+            ui.painter()
+                .layout_no_wrap(duration_text.clone(), mono.clone(), color);
+        right -= galley.size().x;
+        ui.painter().galley(
+            Pos2::new(right, center - galley.size().y * 0.5),
+            galley.clone(),
+            color,
+        );
+        right -= 6.0;
+    }
 
     let path = tool_path(tool);
     let mut action_clicked = false;
-    if let Some(path) = &path {
-        let target = Rect::from_center_size(Pos2::new(x + 10.0, center), Vec2::splat(16.0));
+    if let Some(path) = &path
+        && hover > 0.001
+    {
+        let target = Rect::from_center_size(Pos2::new(right - 8.0, center), Vec2::splat(16.0));
         let open_response = ui.interact(target, id.with("open-file"), Sense::click());
         crate::widgets::pointer(ui, &open_response);
-        let alpha = if open_response.hovered() { 1.0 } else { 0.6 };
+        let alpha = if open_response.hovered() { 1.0 } else { 0.5 };
         if open_response.hovered() {
             ui.painter()
                 .rect_filled(target, CornerRadius::same(theme::radius::XS), p.hover);
+            ui.painter().rect_stroke(
+                target,
+                CornerRadius::same(theme::radius::XS),
+                Stroke::new(theme::HAIRLINE, p.border),
+                StrokeKind::Inside,
+            );
         }
         icons::paint(
             ui,
             Icon::ArrowUpRight,
-            Rect::from_center_size(target.center(), Vec2::splat(12.0)),
+            Rect::from_center_size(target.center(), Vec2::splat(11.0)),
             p.tool_icon.gamma_multiply(alpha),
         );
         if open_response.clicked() {
             action_clicked = true;
             *open_file = Some(path.clone());
         }
-        x += 16.0 + 4.0;
+        right -= 18.0;
     }
 
-    let duration_text = if tool_shows_duration(&tool.name) {
-        tool_duration(tool)
-    } else {
-        String::new()
-    };
-    let mut right = rect.right() - ROW_PAD_END;
-    if !duration_text.is_empty() {
-        let galley = ui.painter().layout_no_wrap(
-            duration_text.clone(),
-            theme::font(ROW_TEXT),
-            p.tool_description,
-        );
-        right -= galley.size().x;
-        ui.painter().galley(
-            Pos2::new(right, center - galley.size().y * 0.5),
-            galley,
-            p.tool_description,
-        );
-        right -= ROW_GAP;
-    }
-
-    let description = tool_description(tool, error, renderer.as_ref());
-    let start = x + ROW_GAP;
+    let start = x + 7.0;
     if !description.is_empty() && right > start {
         let galley = row_galley(
             ui,
             &description,
-            theme::font(ROW_TEXT),
-            if error { p.red } else { p.tool_description },
+            theme::font_mono(theme::TEXT_MICRO),
+            if error { p.error_text } else { p.tool_description },
             right - start,
         );
         ui.painter()
             .with_clip_rect(Rect::from_min_max(
-                Pos2::new(start, rect.top()),
-                Pos2::new(right, rect.bottom()),
+                Pos2::new(start, center - 9.0),
+                Pos2::new(right, center + 9.0),
             ))
             .galley(
                 Pos2::new(start, center - galley.size().y * 0.5),
                 galley,
-                p.tool_description,
+                if error {
+                    p.error_text
+                } else {
+                    p.tool_description
+                },
             );
     }
 
@@ -2735,12 +2947,15 @@ fn tool_row(
         open = !open;
         ui.memory_mut(|memory| memory.data.insert_temp(id.with("open"), open));
     }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 
     if open {
         tool_body(ui, p, md, tool, id, renderer.as_ref());
     }
     if running {
-        ui.ctx().request_repaint_after(Duration::from_millis(1000));
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     rect
 }
@@ -3141,11 +3356,15 @@ fn is_file_tool(name: &str) -> bool {
     )
 }
 
-fn tool_shows_duration(name: &str) -> bool {
-    matches!(
-        name,
-        "bash" | "shell" | "cmd" | "terminal" | "task" | "agent" | "image"
-    )
+fn tool_patch_total(tool: &ToolPart) -> (usize, usize) {
+    let mut additions = 0;
+    let mut deletions = 0;
+    for (_, patch) in tool_patches(tool) {
+        let (adds, dels) = count_patch(&patch);
+        additions += adds;
+        deletions += dels;
+    }
+    (additions, deletions)
 }
 
 fn tool_duration(tool: &ToolPart) -> String {
@@ -3153,7 +3372,7 @@ fn tool_duration(tool: &ToolPart) -> String {
         let start = tool.time.ran.unwrap_or(tool.time.created);
         let now = now_ms();
         if start > 0.0 && now > start {
-            return format!("{}s", ((now - start) / 1000.0).floor().max(0.0) as i64);
+            return elapsed_label(now - start);
         }
         return String::new();
     }
@@ -3164,11 +3383,18 @@ fn tool_duration(tool: &ToolPart) -> String {
         .completed
         .or(tool.time.ran)
         .filter(|end| *end >= tool.time.created)
-        .map(|end| {
-            let seconds = ((end - tool.time.created) / 1000.0).max(0.1);
-            format!("{seconds:.1}s")
-        })
+        .map(|end| elapsed_label(end - tool.time.created))
         .unwrap_or_default()
+}
+
+fn elapsed_label(ms: f64) -> String {
+    if ms < 1_000.0 {
+        format!("{} ms", ms.round().max(1.0) as i64)
+    } else if ms < 60_000.0 {
+        format!("{:.1} s", ms / 1000.0)
+    } else {
+        turn_duration(ms)
+    }
 }
 
 fn tool_icon(name: &str) -> Icon {
@@ -3221,6 +3447,289 @@ fn error_card(ui: &mut Ui, p: &Palette, md: &mut Markdown, title: Option<&str>, 
                 });
             });
         });
+}
+
+fn permission_title(action: &str) -> String {
+    let lower = action.to_ascii_lowercase();
+    if lower.contains("bash")
+        || lower.contains("shell")
+        || lower.contains("command")
+        || lower.contains("execute")
+    {
+        "Run shell command".into()
+    } else if lower.contains("edit") || lower.contains("write") || lower.contains("patch") {
+        "Edit file".into()
+    } else if lower.contains("read") || lower.contains("view") {
+        "Read file".into()
+    } else if lower.contains("fetch") || lower.contains("network") || lower.contains("http") {
+        "Access network".into()
+    } else if action.trim().is_empty() {
+        "Use tool".into()
+    } else {
+        capitalize(action.trim())
+    }
+}
+
+fn permission_command(request: &rchamber_api::models::PermissionRequest) -> Option<String> {
+    request
+        .resources
+        .iter()
+        .find(|resource| !resource.trim().is_empty())
+        .cloned()
+        .or_else(|| {
+            request
+                .message
+                .clone()
+                .filter(|message| !message.trim().is_empty())
+        })
+}
+
+fn permission_cwd(request: &rchamber_api::models::PermissionRequest) -> Option<String> {
+    let metadata = request.metadata.as_ref()?;
+    ["cwd", "directory", "dir", "workdir"]
+        .iter()
+        .find_map(|key| metadata.get(key).and_then(|value| value.as_str()))
+        .map(str::to_string)
+}
+
+fn permission_tag(request: &rchamber_api::models::PermissionRequest, command: Option<&str>) -> String {
+    if !request.action.trim().is_empty() {
+        return request.action.trim().to_ascii_lowercase();
+    }
+    command
+        .and_then(|command| command.split_whitespace().next())
+        .unwrap_or("tool")
+        .to_string()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalKind {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+fn approval_button(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    hint: &str,
+    kind: ApprovalKind,
+) -> bool {
+    let font = theme::font_medium(theme::TEXT_BUTTON);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+    let hint_galley = ui.painter().layout_no_wrap(
+        hint.to_string(),
+        theme::font_mono(10.5),
+        Color32::PLACEHOLDER,
+    );
+    let width = 10.0 + galley.size().x + 6.0 + hint_galley.size().x + 8.0 + 10.0;
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, theme::BUTTON_HEIGHT),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &response);
+    let (fill, border, ink) = match kind {
+        ApprovalKind::Primary => (p.primary, Color32::TRANSPARENT, p.on_primary),
+        ApprovalKind::Secondary => (p.raised_fill(), p.border, p.fg),
+        ApprovalKind::Danger => (p.error_soft, p.error_border, p.error_text),
+    };
+    let hovered = response.hovered();
+    let fill = match kind {
+        ApprovalKind::Primary => {
+            if hovered {
+                p.primary_hover
+            } else {
+                fill
+            }
+        }
+        _ => {
+            if hovered {
+                p.over(fill, p.hover)
+            } else {
+                fill
+            }
+        }
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::DEMO), fill);
+    if border != Color32::TRANSPARENT {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::DEMO),
+            Stroke::new(theme::BORDER, border),
+            StrokeKind::Inside,
+        );
+    }
+    let text_left = rect.left() + 10.0;
+    ui.painter().galley(
+        Pos2::new(text_left, rect.center().y - galley.size().y * 0.5),
+        galley,
+        ink,
+    );
+    let hint_rect = Rect::from_center_size(
+        Pos2::new(
+            rect.right() - 8.0 - (hint_galley.size().x + 8.0) * 0.5,
+            rect.center().y,
+        ),
+        Vec2::new(hint_galley.size().x + 8.0, 15.0),
+    );
+    ui.painter().rect_filled(
+        hint_rect,
+        CornerRadius::same(3),
+        p.alpha(ink, 22),
+    );
+    ui.painter().galley(
+        Pos2::new(
+            hint_rect.center().x - hint_galley.size().x * 0.5,
+            rect.center().y - hint_galley.size().y * 0.5,
+        ),
+        hint_galley,
+        ink.gamma_multiply(0.82),
+    );
+    response.clicked()
+}
+
+pub(crate) fn approval_card(
+    ui: &mut Ui,
+    p: &Palette,
+    request: &rchamber_api::models::PermissionRequest,
+    index: usize,
+    total: usize,
+    actions: &mut Vec<Action>,
+) {
+    let command = permission_command(request);
+    let cwd = permission_cwd(request);
+    let tag = permission_tag(request, command.as_deref());
+    let mut decision: Option<&str> = None;
+    let frame = egui::Frame::new()
+        .fill(p.card)
+        .stroke(Stroke::new(theme::BORDER, p.warning_border))
+        .corner_radius(CornerRadius::same(theme::radius::PANEL))
+        .inner_margin(Margin {
+            left: 12,
+            right: 12,
+            top: 10,
+            bottom: 10,
+        });
+    let response = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing = Vec2::new(0.0, 8.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+            let (icon, _) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::hover());
+            icons::paint(ui, Icon::Shield, icon, p.warning_text);
+            let mut title = format!("Permission required · {}", permission_title(&request.action));
+            if total > 1 {
+                title.push_str(&format!(" ({}/{total})", index + 1));
+            }
+            ui.label(
+                RichText::new(title)
+                    .font(theme::font_semibold(theme::TEXT_UI_LABEL))
+                    .color(p.fg),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(cwd) = &cwd {
+                    ui.label(
+                        RichText::new(format!("cwd: {}", shorten(cwd, 48)))
+                            .font(theme::font_mono(theme::TEXT_MICRO))
+                            .color(p.fg_muted),
+                    );
+                }
+            });
+        });
+        if let Some(command) = &command {
+            let width = ui.available_width();
+            egui::Frame::new()
+                .fill(p.code_bg)
+                .stroke(Stroke::new(theme::BORDER, p.border))
+                .corner_radius(CornerRadius::same(theme::radius::SM))
+                .inner_margin(Margin {
+                    left: 10,
+                    right: 10,
+                    top: 6,
+                    bottom: 6,
+                })
+                .show(ui, |ui| {
+                    let inner = (width - 22.0).max(40.0);
+                    ui.set_width(inner);
+                    let tag_galley = ui.painter().layout_no_wrap(
+                        tag.clone(),
+                        theme::font_mono(theme::TEXT_TAG),
+                        p.fg_muted,
+                    );
+                    let tag_width = tag_galley.size().x + 12.0;
+                    let text_max = (inner - tag_width - 8.0).max(40.0);
+                    let galley = row_galley(
+                        ui,
+                        &shorten(command, 180),
+                        theme::font_mono(theme::TEXT_CODE),
+                        p.fg,
+                        text_max,
+                    );
+                    let (rect, _) = ui
+                        .allocate_exact_size(Vec2::new(inner, galley.size().y.max(18.0)), Sense::hover());
+                    ui.painter().galley(
+                        Pos2::new(rect.left(), rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        p.fg,
+                    );
+                    let chip = Rect::from_center_size(
+                        Pos2::new(rect.right() - tag_width * 0.5, rect.center().y),
+                        Vec2::new(tag_width, theme::TAG_HEIGHT),
+                    );
+                    ui.painter().rect_filled(
+                        chip,
+                        CornerRadius::same(theme::radius::XS),
+                        p.tag_bg,
+                    );
+                    ui.painter().galley(
+                        Pos2::new(
+                            chip.center().x - tag_galley.size().x * 0.5,
+                            chip.center().y - tag_galley.size().y * 0.5,
+                        ),
+                        tag_galley,
+                        p.fg_muted,
+                    );
+                });
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+            if approval_button(ui, p, "Allow once", "↵", ApprovalKind::Primary) {
+                decision = Some("once");
+            }
+            if approval_button(
+                ui,
+                p,
+                "Allow in this session",
+                "⌘↵",
+                ApprovalKind::Secondary,
+            ) {
+                decision = Some("always");
+            }
+            if approval_button(ui, p, "Deny", "Esc", ApprovalKind::Danger) {
+                decision = Some("reject");
+            }
+        });
+    });
+    let rect = response.response.rect;
+    ui.painter().rect_filled(
+        Rect::from_min_size(
+            Pos2::new(rect.left() + 1.0, rect.top() + 1.0),
+            Vec2::new(3.0, (rect.height() - 2.0).max(0.0)),
+        ),
+        CornerRadius::same(1),
+        p.warning_text,
+    );
+    if let Some(decision) = decision {
+        actions.push(Action::ReplyPermission {
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            decision: decision.into(),
+        });
+    }
 }
 
 fn scroll_pill(
@@ -3753,9 +4262,9 @@ mod tests {
 
     #[test]
     fn tool_rows_take_the_reference_line_box() {
-        assert_eq!(row_height(639.0), 32.0);
-        assert_eq!(row_height(640.0), 36.0);
-        assert_eq!(row_height(1600.0), 36.0);
+        assert_eq!(row_height(639.0), 28.0);
+        assert_eq!(row_height(640.0), 28.0);
+        assert_eq!(row_height(1600.0), 28.0);
         assert_eq!(row_height(640.0), ROW_HEIGHT);
         assert_eq!(row_height(639.0), ROW_HEIGHT_NARROW);
     }
@@ -3764,8 +4273,9 @@ mod tests {
     fn activity_fold_title_takes_the_label_size() {
         assert_eq!(FOLD_TITLE, 13.5);
         assert_eq!(FOLD_HEIGHT, 28.0);
-        assert_eq!(ROW_HEIGHT, 36.0);
-        assert_eq!(ROW_HEIGHT_NARROW, 32.0);
+        assert_eq!(ROW_HEIGHT, 28.0);
+        assert_eq!(ROW_HEIGHT_NARROW, 28.0);
+        assert_eq!(REASONING_ROW, 26.0);
     }
 
     #[test]
@@ -3827,12 +4337,12 @@ mod tests {
         egui::__run_test_ui(|ui| {
             let area = Rect::from_min_size(Pos2::new(64.0, 0.0), Vec2::new(1000.0, 800.0));
             let dock = dock_metrics(ui.ctx(), "s", area);
-            assert_eq!(dock.left, 196.0);
+            assert_eq!(dock.left, 184.0);
             assert_eq!(dock.top, composer_top(800.0, 96.0) - PILL_GAP);
 
             let wide = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(1440.0, 900.0));
             let dock = dock_metrics(ui.ctx(), "s", wide);
-            assert_eq!(dock.left, 720.0 - (COLUMN_WIDTH - 2.0 * 24.0) * 0.5);
+            assert_eq!(dock.left, (1440.0 - COLUMN_WIDTH) * 0.5);
         });
     }
 
@@ -3891,13 +4401,13 @@ mod tests {
     #[test]
     fn column_keeps_reference_padding() {
         let (left, inner) = column_geometry(1600.0, true);
-        assert!((left - 440.0).abs() < 0.01);
-        assert!((inner - 720.0).abs() < 0.01);
+        assert!((left - 420.0).abs() < 0.01);
+        assert!((inner - 760.0).abs() < 0.01);
         assert!((left + inner * 0.5 - 800.0).abs() < 0.01);
 
         let (left, inner) = column_geometry(900.0, false);
-        assert!((left - 82.0).abs() < 0.01);
-        assert!((inner - 736.0).abs() < 0.01);
+        assert!((left - 70.0).abs() < 0.01);
+        assert!((inner - 760.0).abs() < 0.01);
 
         let (left, inner) = column_geometry(400.0, false);
         assert!((left - 12.0).abs() < 0.01);
@@ -3974,9 +4484,10 @@ mod tests {
                 Id::unique("streaming"),
                 "some thinking text",
                 true,
+                None,
             );
             assert!(
-                ui.cursor().min.y - before > row_height(700.0),
+                ui.cursor().min.y - before > REASONING_ROW,
                 "streaming body hidden"
             );
             let before = ui.cursor().min.y;
@@ -3987,9 +4498,10 @@ mod tests {
                 Id::unique("settled"),
                 "some thinking text",
                 false,
+                Some(1.8),
             );
             assert!(
-                (ui.cursor().min.y - before - row_height(700.0)).abs() < 0.01,
+                (ui.cursor().min.y - before - REASONING_ROW).abs() < 0.01,
                 "settled body shown {}",
                 ui.cursor().min.y - before
             );

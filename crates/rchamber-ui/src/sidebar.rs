@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+
 use eframe::egui::{
     self, Align, CornerRadius, Layout, Rect, RichText, ScrollArea, Sense, Stroke, TextStyle, Ui,
     Vec2, WidgetText,
 };
-use rchamber_api::models::{Message, Part, Session};
+use rchamber_api::models::{Message, Outcome, Part, Session};
 use rchamber_app::format::{compact_number, money, relative_time};
 use rchamber_app::workspace::{SessionFolder, paths_match};
 use rchamber_app::{Action, Connection, ProjectEntry, ProjectSort, SessionGrouping, ToastKind};
@@ -17,15 +18,15 @@ use crate::motion;
 use crate::theme::{self, Palette};
 
 const HEADER_BAND: f32 = 40.0;
-const HEADER_PAD_X: f32 = 8.0;
-const HEADER_PAD_Y: f32 = 4.0;
-const TOOLBAR_ROW: f32 = 32.0;
-const TOOLBAR_GAP: f32 = 8.0;
+const HEADER_PAD_X: f32 = 12.0;
+const SEARCH_BAND: f32 = 38.0;
+const SEARCH_HEIGHT: f32 = 26.0;
+const SEARCH_PAD_Y: f32 = 6.0;
 const ACTION: f32 = 24.0;
 const ACTION_GLYPH: f32 = 16.0;
 const GRID_INSET: f32 = 12.0;
 const GRID_PAD: f32 = GRID_INSET - (ACTION - ACTION_GLYPH) * 0.5;
-const ROW_HEIGHT: f32 = 34.0;
+const ROW_HEIGHT: f32 = 28.0;
 const ROW_HEIGHT_DETAILED: f32 = 52.0;
 const CHILD_ROW_HEIGHT: f32 = 28.0;
 const ROW_PAD_START: f32 = 6.0;
@@ -37,9 +38,8 @@ const ROW_PAD_Y_DETAILED: f32 = 6.0;
 const TITLE_SIZE: f32 = 13.5;
 const CHILD_TITLE_SIZE: f32 = 12.5;
 const META_SIZE: f32 = 12.0;
-const FOOTER_HEIGHT: f32 = 40.0;
-const FOOTER_PAD_X: f32 = GRID_PAD;
-const FOOTER_PAD_END: f32 = 4.0;
+const META_MONO: f32 = 11.5;
+const FOOTER_HEIGHT: f32 = 34.0;
 const SECTION_HEIGHT: f32 = 28.0;
 const SECTION_LABEL_INSET: f32 = GRID_INSET;
 const SECTION_GAP: f32 = 10.0;
@@ -64,9 +64,7 @@ const SHOW_MORE_HEIGHT: f32 = 28.0;
 const BOTTOM_GAP: f32 = 8.0;
 const MAX_VISIBLE_ROOTS: usize = 7;
 const BULK_HEIGHT: f32 = 38.0;
-const PROJECT_PALETTE: [u32; 8] = [
-    0x3B82F6, 0x22C55E, 0xA855F7, 0xF97316, 0x14B8A6, 0xEC4899, 0xEAB308, 0x6366F1,
-];
+const PROJECT_HASH_TONES: usize = 3;
 
 pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let p = app.palette.clone();
@@ -75,6 +73,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
 
     chrome::sidebar_strip(ui);
     header(ui, app, &p);
+    search_row(ui, app, &p);
 
     let ctx = ui.ctx().clone();
     let quiz = app.model.search.trim().to_string();
@@ -266,7 +265,6 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                     });
                 }
             } else if display.grouping == SessionGrouping::Time {
-                caption(ui, &p, "Conversations");
                 if roots.is_empty() {
                     empty_state(ui, &p, false);
                 } else {
@@ -290,18 +288,18 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                     });
                 }
             } else {
-                caption(ui, &p, "Conversations");
                 if !in_progress.is_empty() {
                     let collapsed = app
                         .model
                         .workspace_store
                         .collapsed_sections
                         .contains("in_progress");
+                    let label = format!("In progress ({})", in_progress.len());
                     let (toggle, _, _) = section_header(
                         ui,
                         &p,
                         "in_progress",
-                        "In progress",
+                        &label,
                         collapsed,
                         false,
                         false,
@@ -342,87 +340,94 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                     });
                 }
 
-                if show_chats && (!chats.is_empty() || !chats_layout.folders.is_empty()) {
+                if show_chats {
                     let collapsed = app
                         .model
                         .workspace_store
                         .collapsed_sections
                         .contains("chats");
-                    let (toggle, add, new_folder) =
-                        section_header(ui, &p, "chats", "Chats", collapsed, true, true);
+                    let label = if chats.is_empty() && chats_layout.folders.is_empty() {
+                        "Conversations".to_string()
+                    } else {
+                        format!("Conversations ({})", chats.len())
+                    };
+                    let (toggle, add, _) =
+                        section_header(ui, &p, "chats", &label, collapsed, true, false);
                     if toggle {
                         toggle_section(app, "chats");
                     }
                     if add {
                         app.begin_new_session(Some(crate::app::CHATS_TARGET.to_string()));
                     }
-                    if new_folder {
-                        app.ui.new_folder = Some(crate::app::CHATS_TARGET.to_string());
-                        app.ui.new_folder_name.clear();
-                    }
                     let collapsed = app
                         .model
                         .workspace_store
                         .collapsed_sections
                         .contains("chats");
-                    let show_all = app.ui.chats_show_all;
-                    let height = layout_height(
-                        &sessions,
-                        &chats_layout,
-                        detailed,
-                        show_all,
-                        &app.ui.show_all_folders,
-                        &ctx,
-                    );
-                    let reveal = motion::Animated::new("sidebar/chats")
-                        .with_duration(duration)
-                        .with_easing(motion::Easing::EaseOut)
-                        .bool(&ctx, !collapsed);
-                    disclosure(ui, height, reveal, |ui| {
-                        let outcome = folder_layout(
-                            ui,
-                            app,
-                            &p,
+                    if collapsed {
+                        // The section is folded; keep its header only.
+                    } else if chats.is_empty() && chats_layout.folders.is_empty() {
+                        let (row, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), EMPTY_ROW_HEIGHT),
+                            Sense::hover(),
+                        );
+                        ui.painter().text(
+                            egui::Pos2::new(row.left() + GRID_INSET, row.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            "No conversations yet",
+                            theme::font(theme::TEXT_META),
+                            p.fg_faint,
+                        );
+                    } else {
+                        let show_all = app.ui.chats_show_all;
+                        let height = layout_height(
                             &sessions,
                             &chats_layout,
                             detailed,
-                            &ctx,
-                            true,
                             show_all,
-                            "chats",
+                            &app.ui.show_all_folders,
+                            &ctx,
                         );
-                        if let Some(id) = outcome.select {
-                            select = Some(id);
-                        }
-                        if outcome.show_all != show_all {
-                            app.ui.chats_show_all = outcome.show_all;
-                        }
-                    });
+                        let reveal = motion::Animated::new("sidebar/chats")
+                            .with_duration(duration)
+                            .with_easing(motion::Easing::EaseOut)
+                            .bool(&ctx, !collapsed);
+                        disclosure(ui, height, reveal, |ui| {
+                            let outcome = folder_layout(
+                                ui,
+                                app,
+                                &p,
+                                &sessions,
+                                &chats_layout,
+                                detailed,
+                                &ctx,
+                                true,
+                                show_all,
+                                "chats",
+                            );
+                            if let Some(id) = outcome.select {
+                                select = Some(id);
+                            }
+                            if outcome.show_all != show_all {
+                                app.ui.chats_show_all = outcome.show_all;
+                            }
+                        });
+                    }
                 }
 
-                ui.add_space(SECTION_GAP);
-                let all_collapsed = !visible_projects.is_empty()
-                    && visible_projects.iter().all(|project| {
+                if !visible_projects.is_empty() {
+                    ui.add_space(SECTION_GAP);
+                    let all_collapsed = visible_projects.iter().all(|project| {
                         app.model
                             .workspace_store
                             .collapsed_projects
                             .contains(&project.id)
                     });
-                let (toggle, _, _) =
-                    section_header(ui, &p, "projects", "Projects", all_collapsed, false, false);
-                if toggle {
-                    set_all_projects_collapsed(app, &visible_projects, !all_collapsed);
-                }
-
-                if visible_projects.is_empty() {
-                    if projects.is_empty()
-                        || !(in_progress.is_empty()
-                            && chats.is_empty()
-                            && chats_layout.folders.is_empty())
-                    {
-                        empty_projects(ui, &p);
-                    } else {
-                        empty_state(ui, &p, false);
+                    let label = format!("Projects ({})", visible_projects.len());
+                    let (toggle, _, _) =
+                        section_header(ui, &p, "projects", &label, all_collapsed, false, false);
+                    if toggle {
+                        set_all_projects_collapsed(app, &visible_projects, !all_collapsed);
                     }
                 }
 
@@ -503,9 +508,9 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     });
 
     ui.painter().vline(
-        side.right() - 0.25,
+        side.right() - theme::BORDER * 0.5,
         side.y_range(),
-        Stroke::new(0.5, crate::app::edge(&p)),
+        Stroke::new(theme::BORDER, crate::app::edge(&p)),
     );
 
     dialogs(&ctx, app);
@@ -554,91 +559,230 @@ fn band(ui: &mut Ui, height: f32, add: impl FnOnce(&mut Ui)) {
 }
 
 fn header(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    let height = HEADER_BAND + if app.ui.search_open { 57.0 } else { 0.0 };
-    band(ui, height, |ui| {
-        ui.add_space(HEADER_PAD_Y);
-        ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), TOOLBAR_ROW),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = TOOLBAR_GAP;
-                ui.add_space(GRID_PAD);
-                let search = action(
-                    ui,
-                    p,
-                    Icon::Search,
-                    app.ui.search_open,
-                    if app.ui.search_open {
-                        ActionTint::Selected
-                    } else {
-                        ActionTint::Idle
-                    },
-                );
-                if search
-                    .on_hover_text(format!(
-                        "Search sessions ({})",
-                        crate::widgets::shortcut_label("F")
-                    ))
-                    .clicked()
-                {
-                    app.ui.search_open = !app.ui.search_open;
-                    app.ui.session_search.clear();
-                    app.model.search.clear();
-                    app.ui.focus_search = app.ui.search_open;
-                }
-                let folder = action(ui, p, Icon::FolderPlus, false, ActionTint::Idle);
-                if folder.on_hover_text("Add project").clicked() {
-                    app.open_add_project();
-                }
-                display_menu(ui, app, p);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(GRID_PAD);
-                    more_menu(ui, app, p);
-                });
-            },
+    band(ui, HEADER_BAND, |ui| {
+        let rect = Rect::from_min_size(
+            ui.cursor().min,
+            Vec2::new(ui.available_width(), HEADER_BAND),
         );
-        if app.ui.search_open {
-            search_row(ui, app, p);
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - theme::BORDER * 0.5,
+            Stroke::new(theme::BORDER, p.border),
+        );
+        let mut right = rect.right() - HEADER_PAD_X;
+        let plus = header_action(ui, p, rect.center().y, &mut right, Icon::Plus, "new-session");
+        if plus
+            .on_hover_text(format!(
+                "New session ({})",
+                crate::widgets::shortcut_label("N")
+            ))
+            .clicked()
+        {
+            app.begin_new_session(None);
+        }
+        let folder = header_action(
+            ui,
+            p,
+            rect.center().y,
+            &mut right,
+            Icon::FolderPlus,
+            "add-project",
+        );
+        if folder
+            .on_hover_text(format!(
+                "Add project ({})",
+                crate::widgets::shortcut_label("O")
+            ))
+            .clicked()
+        {
+            app.open_add_project();
+        }
+        let more = header_action(ui, p, rect.center().y, &mut right, Icon::More, "menu");
+        display_menu(ui, app, p, more);
+
+        let project = header_project(app);
+        let name = project
+            .as_ref()
+            .map(|project| project.display_name().to_string())
+            .unwrap_or_else(|| "RustChamber".into());
+        let branch = project
+            .as_ref()
+            .and_then(|project| project_branch(ui.ctx(), &project.canonical));
+        let chip_room = branch
+            .as_ref()
+            .map(|branch| tag_width(ui, branch) + 6.0)
+            .unwrap_or(0.0);
+        let room = (right - rect.left() - HEADER_PAD_X - chip_room).max(40.0);
+        let galley = WidgetText::from(
+            RichText::new(name)
+                .font(theme::font_semibold(theme::TEXT_UI_HEADER))
+                .color(p.fg),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            room,
+            TextStyle::Body,
+        );
+        let left = rect.left() + HEADER_PAD_X;
+        ui.painter().galley(
+            egui::Pos2::new(left, rect.center().y - galley.size().y * 0.5),
+            galley.clone(),
+            p.fg,
+        );
+        if let Some(branch) = branch {
+            let width = tag_width(ui, &branch);
+            let x = (left + galley.size().x + 6.0).min(right - width);
+            paint_tag(
+                ui,
+                Rect::from_min_size(
+                    egui::Pos2::new(x, rect.center().y - theme::TAG_HEIGHT * 0.5),
+                    Vec2::new(width, theme::TAG_HEIGHT),
+                ),
+                &branch,
+                p.fg_muted,
+                p.tag_bg,
+            );
         }
     });
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ActionTint {
-    Idle,
-    Selected,
-}
-
-fn action(ui: &mut Ui, p: &Palette, icon: Icon, active: bool, tint: ActionTint) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(ACTION), Sense::click());
+fn header_action(
+    ui: &mut Ui,
+    p: &Palette,
+    center_y: f32,
+    right: &mut f32,
+    icon: Icon,
+    id: &'static str,
+) -> egui::Response {
+    let rect = Rect::from_center_size(
+        egui::Pos2::new(*right - ACTION * 0.5, center_y),
+        Vec2::splat(ACTION),
+    );
+    *right -= ACTION + 4.0;
+    let response = ui.interact(rect, egui::Id::unique(("sidebar-action", id)), Sense::click());
     crate::widgets::pointer(ui, &response);
     let hovered = hover_amount(ui.ctx(), response.id.with("hover"), response.hovered());
-    if tint == ActionTint::Selected {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.selection);
+    if hovered > 0.01 {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            p.fade(p.hover, hovered),
+        );
     }
-    let color = match tint {
-        ActionTint::Selected => p.selection_fg,
-        ActionTint::Idle => p.fg_muted.lerp_to_gamma(p.fg, hovered),
-    };
     icons::paint(
         ui,
         icon,
         Rect::from_center_size(rect.center(), Vec2::splat(ACTION_GLYPH)),
-        if active { p.fg } else { color },
+        p.fg_muted.lerp_to_gamma(p.fg, hovered),
     );
     response
 }
 
-fn display_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    let trigger = action(
-        ui,
-        p,
-        Icon::SlidersHorizontal,
-        app.ui.sidebar_menu,
-        ActionTint::Idle,
+fn header_project(app: &RustChamber) -> Option<ProjectEntry> {
+    let stored = app
+        .model
+        .workspace_store
+        .active_project_id
+        .clone()
+        .filter(|id| app.model.project_by_id(id).is_some());
+    stored
+        .or_else(|| {
+            app.model.workspace.as_deref().and_then(|directory| {
+                app.model
+                    .workspace_projects()
+                    .into_iter()
+                    .find(|project| paths_match(&project.canonical, directory))
+                    .map(|project| project.id.clone())
+            })
+        })
+        .or_else(|| {
+            app.model
+                .active
+                .as_ref()
+                .and_then(|chat| app.model.project_for_session(&chat.session))
+                .map(|project| project.id.clone())
+        })
+        .and_then(|id| app.model.project_by_id(&id).cloned())
+        .or_else(|| app.model.workspace_projects().first().cloned().cloned())
+}
+
+fn tag_width(ui: &Ui, label: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(theme::TEXT_TAG),
+        egui::Color32::PLACEHOLDER,
     );
-    trigger.clone().on_hover_text("Display");
+    galley.size().x + 12.0
+}
+
+fn paint_tag(ui: &Ui, rect: Rect, label: &str, fg: egui::Color32, bg: egui::Color32) {
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
+    ui.painter().galley(
+        egui::Pos2::new(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        fg,
+    );
+}
+
+fn project_branch(ctx: &egui::Context, directory: &str) -> Option<String> {
+    let key = egui::Id::unique(("sidebar-branch", directory));
+    let now = ctx.input(|input| input.time);
+    if let Some((at, value)) = ctx.data(|data| data.get_temp::<(f64, Option<String>)>(key))
+        && now - at < 2.0
+    {
+        return value;
+    }
+    let value = read_branch(std::path::Path::new(directory));
+    ctx.data_mut(|data| data.insert_temp(key, (now, value.clone())));
+    value
+}
+
+fn read_branch(start: &std::path::Path) -> Option<String> {
+    let mut current = start.to_path_buf();
+    loop {
+        let marker = current.join(".git");
+        let git = if marker.is_dir() {
+            Some(marker)
+        } else if marker.is_file() {
+            let text = std::fs::read_to_string(&marker).ok()?;
+            let target = text.strip_prefix("gitdir:")?.trim();
+            let target = std::path::Path::new(target);
+            Some(if target.is_absolute() {
+                target.to_path_buf()
+            } else {
+                current.join(target)
+            })
+        } else {
+            None
+        };
+        if let Some(git) = git {
+            let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+            let head = head.trim();
+            if let Some(reference) = head.strip_prefix("ref:") {
+                let reference = reference.trim();
+                return Some(reference.rsplit('/').next().unwrap_or(reference).to_string());
+            }
+            if !head.is_empty() {
+                return Some(head.chars().take(7).collect());
+            }
+            return None;
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn display_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette, trigger: egui::Response) {
+    let _ = trigger.clone().on_hover_text("Sidebar");
     let id = egui::Id::unique("sidebar-display");
     let mut open = app.ui.sidebar_menu;
     let mut state = app.ui.sidebar_menu;
@@ -772,59 +916,15 @@ fn display_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             state = false;
         }
         items.push(response);
-    });
-    menu_nav_focus(ui.ctx(), id, open, &items);
-    if trigger.clicked() {
-        state = !state;
-    } else if !open {
-        state = false;
-    }
-    app.ui.sidebar_menu = state;
-}
-
-fn more_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    let trigger = action(ui, p, Icon::More, app.ui.more_menu, ActionTint::Idle);
-    trigger.clone().on_hover_text("More");
-    let id = egui::Id::unique("sidebar-more");
-    let mut open = app.ui.more_menu;
-    let mut state = app.ui.more_menu;
-    let mut items: Vec<egui::Response> = Vec::new();
-    menu_popup(ui.ctx(), &trigger, id, &mut open, p, 4.0, |ui, _| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        ui.set_width(220.0);
-        for (label, icon) in [
-            ("Issues & PRs", Icon::GitPullRequest),
-            ("Scheduled tasks", Icon::CalendarClock),
-        ] {
-            let response = crate::widgets::menu_item(ui, label, Some(icon), None, p);
-            if response.clicked() {
-                app.model
-                    .toast(ToastKind::Info, "Not available in this build yet");
-                state = false;
-            }
-            items.push(response);
-        }
+        ui.add_space(2.0);
+        crate::widgets::hline(ui, p, 4.0);
+        ui.add_space(2.0);
         let response = crate::widgets::menu_item(ui, "Archive", Some(Icon::Archive), None, p);
         if response.clicked() {
             app.ui.archive_open = true;
             state = false;
         }
         items.push(response);
-        for (label, icon) in [
-            ("Stats", Icon::ChartBar),
-            ("Integrations catalog", Icon::Store),
-        ] {
-            let response = crate::widgets::menu_item(ui, label, Some(icon), None, p);
-            if response.clicked() {
-                app.model
-                    .toast(ToastKind::Info, "Not available in this build yet");
-                state = false;
-            }
-            items.push(response);
-        }
-        ui.add_space(2.0);
-        crate::widgets::hline(ui, p, 4.0);
-        ui.add_space(2.0);
         let response = crate::widgets::menu_item(
             ui,
             "Settings",
@@ -844,38 +944,36 @@ fn more_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     } else if !open {
         state = false;
     }
-    app.ui.more_menu = state;
+    app.ui.sidebar_menu = state;
 }
 
 fn search_row(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    let width = (ui.available_width() - HEADER_PAD_X * 2.0).max(80.0);
-    band(ui, 57.0, |ui| {
-        ui.add_space(4.0);
+    band(ui, SEARCH_BAND, |ui| {
+        ui.add_space(SEARCH_PAD_Y);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(HEADER_PAD_X);
-            let field = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, 32.0));
+            let width = (ui.available_width() - HEADER_PAD_X).max(60.0);
+            let field =
+                Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, SEARCH_HEIGHT));
             let response = ui.allocate_rect(field, Sense::click());
             let id = egui::Id::unique("sidebar-search");
             let focused = ui.memory(|memory| memory.has_focus(id));
+            let corner = CornerRadius::same(theme::radius::SM);
+            ui.painter().rect_filled(field, corner, p.bg);
             ui.painter().rect_stroke(
                 field,
-                CornerRadius::same(theme::radius::MD),
-                Stroke::new(1.0, if focused { p.alpha(p.fg, 66) } else { p.border }),
+                corner,
+                Stroke::new(
+                    theme::BORDER,
+                    if focused { p.border_focus } else { p.tool_border },
+                ),
                 egui::StrokeKind::Inside,
             );
-            icons::paint(
-                ui,
-                Icon::Search,
-                Rect::from_center_size(
-                    egui::Pos2::new(field.left() + 12.0, field.center().y),
-                    Vec2::splat(16.0),
-                ),
-                p.fg_muted,
-            );
+            let hint_room = (field.width() - 16.0 - 34.0).max(20.0);
             let text_rect = Rect::from_min_max(
-                egui::Pos2::new(field.left() + 32.0, field.top() + 6.0),
-                egui::Pos2::new(field.right() - 32.0, field.bottom() - 4.0),
+                egui::Pos2::new(field.left() + 8.0, field.top()),
+                egui::Pos2::new(field.left() + 8.0 + hint_room, field.bottom()),
             );
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
@@ -886,44 +984,28 @@ fn search_row(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                 egui::TextEdit::singleline(&mut app.ui.session_search)
                     .id(id)
                     .frame(egui::Frame::NONE)
-                    .hint_text(
-                        RichText::new("Search sessions")
-                            .font(theme::font(TITLE_SIZE))
-                            .color(p.fg_muted),
-                    )
+                    .margin(egui::Margin::ZERO)
+                    .align(egui::Align2::LEFT_CENTER)
                     .text_color(p.fg)
-                    .font(theme::font(TITLE_SIZE))
+                    .font(theme::font(theme::TEXT_META))
                     .desired_width(f32::INFINITY),
             );
+            if edit.changed() {
+                app.model.search = app.ui.session_search.trim().to_string();
+            }
             if response.clicked() || app.ui.focus_search {
                 edit.request_focus();
                 app.ui.focus_search = false;
             }
-            let enter = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if enter || (focused && ui.input(|input| input.key_pressed(egui::Key::Enter))) {
-                app.model.search = app.ui.session_search.trim().to_string();
-                edit.request_focus();
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::Escape)) && focused {
-                if app.ui.session_search.is_empty() {
-                    app.ui.search_open = false;
-                } else {
-                    app.ui.session_search.clear();
-                    app.model.search.clear();
-                    edit.request_focus();
-                }
-            } else if ui.input(|input| input.key_pressed(egui::Key::Escape)) && app.ui.search_open {
-                if app.ui.session_search.is_empty() {
-                    app.ui.search_open = false;
-                } else {
-                    app.ui.session_search.clear();
-                    app.model.search.clear();
-                }
+            if focused && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                app.ui.session_search.clear();
+                app.model.search.clear();
+                ui.memory_mut(|memory| memory.surrender_focus(id));
             }
             if !app.ui.session_search.is_empty() {
                 let clear = Rect::from_center_size(
                     egui::Pos2::new(field.right() - 16.0, field.center().y),
-                    Vec2::splat(24.0),
+                    Vec2::splat(22.0),
                 );
                 let response = ui.interact(
                     clear,
@@ -933,33 +1015,39 @@ fn search_row(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                 icons::paint(
                     ui,
                     Icon::Close,
-                    Rect::from_center_size(clear.center(), Vec2::splat(14.0)),
-                    if response.hovered() { p.fg } else { p.fg_muted },
+                    Rect::from_center_size(clear.center(), Vec2::splat(12.0)),
+                    if response.hovered() { p.fg } else { p.fg_faint },
                 );
                 if response.clicked() {
                     app.ui.session_search.clear();
                     app.model.search.clear();
                     ui.memory_mut(|memory| memory.request_focus(id));
                 }
+            } else {
+                let label = crate::widgets::shortcut_label("F");
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(label, theme::font_mono(10.5), p.fg_faint);
+                ui.painter().galley(
+                    egui::Pos2::new(
+                        field.right() - 8.0 - galley.size().x,
+                        field.center().y - galley.size().y * 0.5,
+                    ),
+                    galley,
+                    p.fg_faint,
+                );
+            }
+            if app.ui.session_search.is_empty() && !focused {
+                ui.painter().text(
+                    egui::Pos2::new(field.left() + 8.0, field.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "Filter sessions…",
+                    theme::font(theme::TEXT_META),
+                    p.fg_faint,
+                );
             }
         });
-        ui.add_space(4.0);
-        let (hint_rect, _) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), META_SIZE + 5.0),
-            Sense::hover(),
-        );
-        let hint = if app.ui.session_search.trim().is_empty() {
-            "Press ↵ to search · Esc to close"
-        } else {
-            "Press ↵ to search · Esc to clear"
-        };
-        ui.painter().text(
-            egui::Pos2::new(hint_rect.left() + GRID_INSET, hint_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            hint,
-            theme::font(META_SIZE),
-            p.fg_muted,
-        );
+        ui.add_space(SEARCH_PAD_Y);
     });
 }
 
@@ -1696,18 +1784,16 @@ fn section_header(
         crate::widgets::pointer(ui, &add);
         add_hovered = add.hovered();
         add_clicked = add.clicked();
-        if add_hovered || response.hovered() {
-            icons::paint(
-                ui,
-                Icon::Plus,
-                Rect::from_center_size(add_rect.center(), Vec2::splat(SECTION_ACTION_GLYPH)),
-                if add_hovered { p.fg } else { p.fg_muted },
-            );
-        }
+        icons::paint(
+            ui,
+            Icon::Plus,
+            Rect::from_center_size(add_rect.center(), Vec2::splat(SECTION_ACTION_GLYPH)),
+            if add_hovered { p.fg } else { p.fg_faint },
+        );
     }
     let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        theme::font_medium(theme::TEXT_UI_LABEL),
+        label.to_uppercase(),
+        theme::font_mono(11.0),
         p.fg_muted,
     );
     let left = slot.left() + SECTION_LABEL_INSET;
@@ -1790,19 +1876,6 @@ fn empty_state(ui: &mut Ui, p: &Palette, searching: bool) {
         );
         let _ = ui.allocate_exact_size(Vec2::new(1.0, EMPTY_BLOCK - 40.0), Sense::hover());
     });
-}
-
-fn empty_projects(ui: &mut Ui, p: &Palette) {
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(GRID_INSET);
-        ui.label(
-            RichText::new("No projects yet. Add one with the folder button.")
-                .font(theme::font(theme::TEXT_MICRO))
-                .color(p.fg_muted),
-        );
-    });
-    ui.add_space(8.0);
 }
 
 fn empty_project_row(ui: &mut Ui, p: &Palette, project_id: &str) -> bool {
@@ -1929,21 +2002,31 @@ fn session_row(
     let archive_clicked = actions_visible && archive.clicked();
 
     let fill = if active || selected {
-        p.scale_alpha(p.selection, 0.65)
+        p.active
     } else if pressed {
-        p.scale_alpha(p.hover, 0.7)
+        p.hover
     } else {
-        p.scale_alpha(p.hover, 0.55)
+        p.hover
     };
     if active || selected || pressed || show_trigger {
         ui.painter()
-            .rect_filled(card, CornerRadius::same(theme::radius::MD), fill);
+            .rect_filled(card, CornerRadius::same(theme::radius::SM), fill);
+    }
+    if active {
+        ui.painter().rect_filled(
+            Rect::from_center_size(
+                egui::Pos2::new(card.left() + 1.0, card.center().y),
+                Vec2::new(2.0, 16.0),
+            ),
+            CornerRadius::same(1),
+            p.primary,
+        );
     }
     if selected {
         ui.painter().rect_stroke(
             card,
-            CornerRadius::same(theme::radius::MD),
-            Stroke::new(0.5, p.fg_muted),
+            CornerRadius::same(theme::radius::SM),
+            Stroke::new(theme::HAIRLINE, p.primary),
             egui::StrokeKind::Inside,
         );
     }
@@ -1955,7 +2038,7 @@ fn session_row(
     let pinned = app.model.is_pinned(session);
     let work = app.model.is_work(session);
     let title_color = if active || selected {
-        p.selection_fg
+        p.fg
     } else if depth > 0 {
         p.fg_muted
     } else {
@@ -1985,29 +2068,46 @@ fn session_row(
             Rect::from_center_size(state_center, Vec2::splat(MARK)),
             p.coral,
         );
-    } else if !running && unread {
-        icons::paint(
-            ui,
-            Icon::CircleCheck,
-            Rect::from_center_size(state_center, Vec2::splat(MARK)),
-            p.green,
-        );
+    } else if running {
+        ui.painter()
+            .circle_filled(state_center, 3.5, p.primary);
+    } else if session.outcome == Some(Outcome::Failed) {
+        ui.painter().circle_filled(state_center, 3.0, p.red);
+    } else if unread {
+        ui.painter().circle_filled(state_center, 2.5, p.primary);
+    } else {
+        ui.painter().circle_filled(state_center, 2.0, p.fg_muted);
     }
 
     let now = rchamber_app::now_ms();
-    let time_color = if running { p.blue } else { p.fg_muted };
-    let time_galley = if row_detailed {
+    let time_color = p.fg_muted;
+    let diff_stats = session_diff(app, &session.id);
+    let time_galley = if row_detailed || diff_stats.is_some() {
         None
     } else {
         let time = match running_since {
             Some(started) => format_elapsed(now - started),
-            None => relative_time(session.time.updated),
+            None => compact_time(session.time.updated),
         };
         (!time.is_empty()).then(|| {
             ui.painter()
-                .layout_no_wrap(time, theme::font(META_SIZE), time_color)
+                .layout_no_wrap(time, theme::font_mono(META_MONO), time_color)
         })
     };
+    let diff_meta = diff_stats.map(|(added, removed)| {
+        (
+            ui.painter().layout_no_wrap(
+                format!("+{added}"),
+                theme::font_mono(META_MONO),
+                p.diff_added,
+            ),
+            ui.painter().layout_no_wrap(
+                format!("-{removed}"),
+                theme::font_mono(META_MONO),
+                p.diff_removed,
+            ),
+        )
+    });
     let marker_width = if pinned { MARK + 4.0 } else { 0.0 }
         + if work && !running { MARK + 4.0 } else { 0.0 }
         + if running { MARK + 4.0 } else { 0.0 };
@@ -2015,11 +2115,15 @@ fn session_row(
     let trailing = if show_trigger {
         MENU_TRIGGER_INSET + MENU_TRIGGER + 6.0 + action_width
     } else {
-        let time_width = time_galley
-            .as_ref()
-            .map(|galley| galley.size().x + 4.0)
-            .unwrap_or(0.0);
-        ROW_END_INSET + time_width + marker_width
+        let meta_width = if let Some((added, removed)) = diff_meta.as_ref() {
+            added.size().x + 4.0 + removed.size().x + 4.0
+        } else {
+            time_galley
+                .as_ref()
+                .map(|galley| galley.size().x + 4.0)
+                .unwrap_or(0.0)
+        };
+        ROW_END_INSET + meta_width + marker_width
     };
     let title_left = card.left() + ROW_TEXT_INSET;
     let title_room = (card.right() - title_left - trailing).max(40.0);
@@ -2071,7 +2175,22 @@ fn session_row(
 
     if !show_trigger {
         let mut end = card.right() - ROW_END_INSET;
-        if let Some(galley) = &time_galley {
+        if let Some((added, removed)) = &diff_meta {
+            end -= removed.size().x;
+            ui.painter().galley(
+                egui::Pos2::new(end, card.center().y - removed.size().y * 0.5),
+                removed.clone(),
+                p.diff_removed,
+            );
+            end -= 4.0;
+            end -= added.size().x;
+            ui.painter().galley(
+                egui::Pos2::new(end, card.center().y - added.size().y * 0.5),
+                added.clone(),
+                p.diff_added,
+            );
+            end -= 4.0;
+        } else if let Some(galley) = &time_galley {
             end -= galley.size().x;
             ui.painter().galley(
                 egui::Pos2::new(end, card.center().y - galley.size().y * 0.5),
@@ -2517,6 +2636,20 @@ fn running_since(app: &RustChamber, all: &[Session], id: &str) -> Option<f64> {
     started
 }
 
+fn compact_time(updated: f64) -> String {
+    const MINUTE: f64 = 60_000.0;
+    let delta = (rchamber_app::now_ms() - updated).max(0.0);
+    if delta < MINUTE {
+        "now".into()
+    } else if delta < 60.0 * MINUTE {
+        format!("{}m", (delta / MINUTE).round() as i64)
+    } else if delta < 24.0 * 60.0 * MINUTE {
+        format!("{}h", (delta / (60.0 * MINUTE)).round() as i64)
+    } else {
+        format!("{}d", (delta / (24.0 * 60.0 * MINUTE)).round() as i64)
+    }
+}
+
 fn format_elapsed(ms: f64) -> String {
     let total = (ms.max(0.0) / 1000.0) as u64;
     if total < 60 {
@@ -2566,6 +2699,17 @@ fn running(app: &RustChamber, session: &Session) -> bool {
         (Some(_), None) => true,
         _ => false,
     }
+}
+
+fn session_diff(app: &RustChamber, id: &str) -> Option<(u32, u32)> {
+    let chat = app
+        .model
+        .active
+        .as_ref()
+        .filter(|chat| chat.session.id == id)?;
+    let added: u32 = chat.diff.iter().map(|file| file.additions).sum();
+    let removed: u32 = chat.diff.iter().map(|file| file.deletions).sum();
+    (added + removed > 0).then_some((added, removed))
 }
 
 fn permission_pending(app: &RustChamber, id: &str) -> bool {
@@ -3013,105 +3157,242 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         Vec2::new(ui.available_width(), FOOTER_HEIGHT),
         Sense::hover(),
     );
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.add_space(FOOTER_PAD_X);
-            let settings = footer_button(ui, p, Icon::Settings);
-            if settings
-                .on_hover_text(format!(
-                    "Settings ({})",
-                    crate::widgets::shortcut_label(",")
-                ))
-                .clicked()
-            {
-                app.open_settings();
-            }
-            let help = footer_button(ui, p, Icon::Info);
-            if help.on_hover_text("Keyboard shortcuts").clicked() {
-                let hint = format!(
-                    "{} commands · {} new session · {} search · {} settings",
-                    crate::widgets::shortcut_label("K"),
-                    crate::widgets::shortcut_label("N"),
-                    crate::widgets::shortcut_label("F"),
-                    crate::widgets::shortcut_label(",")
-                );
-                app.model.toast(ToastKind::Info, hint);
-            }
-            crate::update::sidebar_badge(ui, app, p);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                ui.add_space(FOOTER_PAD_END);
-                let (color, label) = match &app.model.connection {
-                    Connection::Ready => (p.green, "Local".to_string()),
-                    Connection::Connecting => (p.primary, "Starting".to_string()),
-                    Connection::Reconnecting(_) => (p.coral, "Reconnecting".to_string()),
-                    Connection::Failed(_) => (p.red, "Offline".to_string()),
-                    Connection::Disconnected => (p.fg_muted, "Disconnected".to_string()),
-                };
-                let version = app
-                    .model
-                    .server
-                    .as_ref()
-                    .map(|server| server.version.clone());
-                let galley = ui.painter().layout_no_wrap(
-                    label.clone(),
-                    theme::font(theme::TEXT_META),
-                    p.fg_muted,
-                );
-                let width = 8.0 + 6.0 + galley.size().x + 8.0;
-                let (rect, response) =
-                    ui.allocate_exact_size(Vec2::new(width.min(192.0), ACTION), Sense::hover());
-                if response.hovered() {
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(theme::radius::MD),
-                        p.scale_alpha(p.hover, 0.5),
-                    );
-                }
-                ui.painter().circle_filled(
-                    egui::Pos2::new(rect.left() + 4.0 + 4.0, rect.center().y),
-                    4.0,
-                    color,
-                );
-                ui.painter().galley(
-                    egui::Pos2::new(
-                        rect.left() + 4.0 + 12.0,
-                        rect.center().y - galley.size().y * 0.5,
-                    ),
-                    galley,
-                    p.fg_muted,
-                );
-                if let Some(version) = version {
-                    let _ = response.on_hover_text(format!("OpenCode {version}"));
-                }
-            });
-        },
+    ui.painter().hline(
+        rect.x_range(),
+        rect.top() + theme::BORDER * 0.5,
+        Stroke::new(theme::BORDER, p.border),
     );
-}
-
-fn footer_button(ui: &mut Ui, p: &Palette, icon: Icon) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(ACTION), Sense::click());
-    crate::widgets::pointer(ui, &response);
-    let hovered = hover_amount(ui.ctx(), response.id.with("hover"), response.hovered());
-    if hovered > 0.0 {
+    let response = ui.interact(
+        rect,
+        egui::Id::unique("sidebar-footer"),
+        Sense::hover(),
+    );
+    let (color, status) = match &app.model.connection {
+        Connection::Ready => (p.green, "Local"),
+        Connection::Connecting => (p.primary, "Starting"),
+        Connection::Reconnecting(_) => (p.coral, "Reconnecting"),
+        Connection::Failed(_) => (p.red, "Offline"),
+        Connection::Disconnected => (p.fg_faint, "Disconnected"),
+    };
+    let font = theme::font_medium(theme::TEXT_META);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(status.to_string(), font, p.fg_muted);
+    let end = rect.right() - HEADER_PAD_X;
+    let pill_width = 8.0 + 14.0 + 6.0 + galley.size().x + 10.0;
+    let pill_rect = Rect::from_min_max(
+        egui::Pos2::new(end - pill_width, rect.center().y - 12.0),
+        egui::Pos2::new(end, rect.center().y + 12.0),
+    );
+    let pill = ui.interact(
+        pill_rect,
+        egui::Id::unique("sidebar-instance"),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &pill);
+    if pill.hovered() {
         ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::radius::MD),
-            p.scale_alpha(p.hover, 0.5 * hovered),
+            pill_rect,
+            CornerRadius::same(theme::radius::SM),
+            p.hover,
         );
     }
     icons::paint(
         ui,
-        icon,
-        Rect::from_center_size(rect.center(), Vec2::splat(ACTION_GLYPH)),
-        p.fg_muted.lerp_to_gamma(p.fg, hovered),
+        Icon::Layers,
+        Rect::from_center_size(
+            egui::Pos2::new(pill_rect.left() + 8.0 + 7.0, pill_rect.center().y),
+            Vec2::splat(14.0),
+        ),
+        p.fg_muted,
     );
-    response
+    ui.painter().galley(
+        egui::Pos2::new(
+            pill_rect.left() + 8.0 + 14.0 + 6.0,
+            pill_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        p.fg_muted,
+    );
+    let _ = pill.clone().on_hover_text("Current instance");
+    let detail = app
+        .model
+        .server
+        .as_ref()
+        .map(|server| format!("OpenCode {}", server.version))
+        .unwrap_or_else(|| "OpenCode server".into());
+    let endpoint = app
+        .settings
+        .endpoint
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            app.model
+                .server
+                .as_ref()
+                .and_then(|server| server.urls.first().cloned())
+        })
+        .unwrap_or_else(|| "127.0.0.1".into());
+    let _ = response.on_hover_text(format!("{detail}\n{endpoint}"));
+
+    let popup_id = egui::Id::unique("sidebar-instance-popup");
+    let mut open = ui
+        .data(|data| data.get_temp::<bool>(popup_id))
+        .unwrap_or(false);
+    if pill.clicked() {
+        open = !open;
+    }
+    let mut add_instance = false;
+    crate::app::menu_popup(ui.ctx(), &pill, popup_id, &mut open, p, 8.0, |ui, _| {
+        ui.set_width(330.0);
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Current")
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.fg_muted),
+            );
+            ui.label(
+                RichText::new("Local")
+                    .font(theme::font_semibold(theme::TEXT_UI_LABEL))
+                    .color(p.fg),
+            );
+            ui.label(
+                RichText::new("· Default")
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.fg_faint),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let refresh = crate::widgets::icon_button_hit(
+                    ui,
+                    Icon::Refresh,
+                    13.0,
+                    24.0,
+                    p.fg_muted,
+                )
+                .on_hover_text("Reconnect");
+                if refresh.clicked() {
+                    app.apply_connection_settings();
+                }
+            });
+        });
+        egui::Frame::new()
+            .fill(p.card)
+            .stroke(Stroke::new(theme::BORDER, p.border))
+            .corner_radius(theme::radius::PANEL)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Local")
+                            .font(theme::font_semibold(theme::TEXT_UI_LABEL))
+                            .color(p.fg),
+                    );
+                    crate::widgets::tag_chip(ui, "Current", p);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        crate::widgets::icon_button_hit(
+                            ui,
+                            Icon::Layers,
+                            14.0,
+                            24.0,
+                            p.fg_muted,
+                        )
+                        .on_hover_text("Local server");
+                        crate::widgets::icon_button_hit(
+                            ui,
+                            Icon::Pin,
+                            14.0,
+                            24.0,
+                            p.primary,
+                        )
+                        .on_hover_text("Default instance");
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.painter().circle_filled(
+                        ui.cursor().left_center() + Vec2::new(3.0, 0.0),
+                        3.0,
+                        color,
+                    );
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new(if matches!(app.model.connection, Connection::Ready) {
+                            "Connected"
+                        } else {
+                            status
+                        })
+                        .font(theme::font(theme::TEXT_META))
+                        .color(if matches!(app.model.connection, Connection::Ready) {
+                            p.green
+                        } else {
+                            p.fg_muted
+                        }),
+                    );
+                });
+                ui.label(
+                    RichText::new(&endpoint)
+                        .font(theme::font_mono(11.5))
+                        .color(p.fg_muted),
+                );
+            });
+        let (row, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), 30.0),
+            Sense::click(),
+        );
+        crate::widgets::pointer(ui, &response);
+        if response.hovered() {
+            ui.painter().rect_filled(
+                row,
+                CornerRadius::same(theme::radius::SM),
+                p.hover,
+            );
+        }
+        icons::paint(
+            ui,
+            Icon::Plus,
+            Rect::from_center_size(
+                egui::Pos2::new(row.left() + 12.0, row.center().y),
+                Vec2::splat(14.0),
+            ),
+            p.fg_muted,
+        );
+        ui.painter().text(
+            egui::Pos2::new(row.left() + 28.0, row.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Add instance",
+            theme::font(theme::TEXT_UI_LABEL),
+            p.fg,
+        );
+        let chip = egui::Rect::from_min_size(
+            egui::Pos2::new(row.right() - 92.0, row.center().y - 9.0),
+            Vec2::new(80.0, 18.0),
+        );
+        ui.painter().rect_filled(
+            chip,
+            CornerRadius::same(theme::radius::XS),
+            p.tag_bg,
+        );
+        ui.painter().text(
+            chip.center(),
+            egui::Align2::CENTER_CENTER,
+            "Coming soon",
+            theme::font_mono(10.0),
+            p.fg_faint,
+        );
+        if response.on_hover_text("Remote instances are not available yet").clicked() {
+            add_instance = true;
+        }
+    });
+    if add_instance {
+        app.open_settings();
+        crate::settings::open_page(ui.ctx(), 0);
+        open = false;
+    }
+    ui.data_mut(|data| data.insert_temp(popup_id, open));
 }
+
 
 fn grouping_label(grouping: SessionGrouping) -> &'static str {
     match grouping {
@@ -3388,30 +3669,13 @@ fn timestamp_label(ms: f64) -> String {
 }
 
 fn project_color(project: &ProjectEntry, p: &Palette) -> egui::Color32 {
-    if let Some(color) = project.color.as_deref().and_then(parse_hex) {
-        return color;
-    }
-    let color = PROJECT_PALETTE[project_hash(&project.id) % PROJECT_PALETTE.len()];
-    p.mix(
-        egui::Color32::from_rgb(
-            ((color >> 16) & 0xFF) as u8,
-            ((color >> 8) & 0xFF) as u8,
-            (color & 0xFF) as u8,
-        ),
-        p.fg,
-        if p.dark { 0.0 } else { 0.08 },
-    )
-}
-
-fn parse_hex(value: &str) -> Option<egui::Color32> {
-    let value = value.trim().trim_start_matches('#');
-    if value.len() != 6 || !value.chars().all(|character| character.is_ascii_hexdigit()) {
-        return None;
-    }
-    let red = u8::from_str_radix(&value[0..2], 16).ok()?;
-    let green = u8::from_str_radix(&value[2..4], 16).ok()?;
-    let blue = u8::from_str_radix(&value[4..6], 16).ok()?;
-    Some(egui::Color32::from_rgb(red, green, blue))
+    let tone = project_hash(&project.id) % PROJECT_HASH_TONES;
+    let base = match tone {
+        0 => p.primary,
+        1 => p.primary_text,
+        _ => p.mix(p.fg_muted, p.fg, if p.dark { 0.2 } else { 0.1 }),
+    };
+    p.mix(base, p.fg, if p.dark { 0.0 } else { 0.08 })
 }
 
 fn project_hash(id: &str) -> usize {
@@ -4659,7 +4923,7 @@ mod tests {
     }
 
     #[test]
-    fn project_colors_are_deterministic_and_parse_hex() {
+    fn project_colors_are_deterministic_tints() {
         let p = Palette::dark();
         let project = ProjectEntry {
             id: "dir:/tmp/alpha".into(),
@@ -4671,12 +4935,9 @@ mod tests {
             added_at: 1.0,
         };
         assert_eq!(project_color(&project, &p), project_color(&project, &p));
-        let mut custom = project.clone();
-        custom.color = Some("#FF8800".into());
-        assert_eq!(
-            project_color(&custom, &p),
-            egui::Color32::from_rgb(0xFF, 0x88, 0x00)
-        );
+        let mut other = project.clone();
+        other.id = "dir:/tmp/beta".into();
+        assert_ne!(project_color(&other, &p), egui::Color32::PLACEHOLDER);
     }
 
     #[test]

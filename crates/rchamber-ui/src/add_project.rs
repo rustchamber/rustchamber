@@ -23,6 +23,7 @@ const RAIL_WIDTH: f32 = 180.0;
 const HEADER_HEIGHT: f32 = 58.0;
 const FOOTER_HEIGHT: f32 = 56.0;
 const CONTENT_PAD: f32 = 20.0;
+const FOOTER_GAP: f32 = 8.0;
 const RAIL_PAD: f32 = 12.0;
 const ROW_HEIGHT: f32 = 34.0;
 const ROW_TALL: f32 = 52.0;
@@ -390,8 +391,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
     let frame = egui::Frame::new()
         .fill(p.bg)
         .corner_radius(theme::radius::XL)
-        .stroke(Stroke::new(theme::HAIRLINE, p.elevation_ring))
-        .shadow(p.modal_shadow())
+        .stroke(Stroke::new(theme::BORDER, p.border))
         .inner_margin(Margin::ZERO);
     let mut outcome = Outcome::default();
     let modal = egui::Modal::new(Id::unique("add-project-modal"))
@@ -433,7 +433,10 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
             );
             let body_rect = Rect::from_min_max(
                 Pos2::new(content_rect.left() + CONTENT_PAD, header_rect.bottom()),
-                Pos2::new(content_rect.right() - CONTENT_PAD, footer_rect.top()),
+                Pos2::new(
+                    content_rect.right() - CONTENT_PAD,
+                    footer_rect.top() - FOOTER_GAP,
+                ),
             );
             header(ui, header_rect, state, &p, &mut outcome);
 
@@ -602,12 +605,12 @@ fn rail_item(ui: &mut Ui, p: &Palette, icon: Icon, label: &str, selected: bool) 
     widgets::pointer(ui, &response);
     if selected {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.selection);
+            .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.active);
     } else if response.hovered() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.hover);
     }
-    let tint = if selected { p.selection_fg } else { p.fg };
+    let tint = p.fg;
     icons::paint(
         ui,
         icon,
@@ -993,35 +996,29 @@ fn clone_tab(ui: &mut Ui, state: &mut State, projects: &[ProjectEntry], p: &Pale
                 state.clone_derived = name;
             }
             ui.add_space(10.0);
-            widgets::section_label(ui, "Clone into", p);
-            ui.add_space(3.0);
-            let field_width = (ui.available_width() - 74.0).max(100.0);
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                ui.allocate_ui_with_layout(
-                    Vec2::new(field_width, widgets::INPUT_HEIGHT),
-                    Layout::left_to_right(Align::Center),
-                    |ui| {
-                        target_changed = field_with_icon(
-                            ui,
-                            &mut state.clone_target,
-                            "~/Projects",
-                            Icon::FolderOpen,
-                            false,
-                            true,
-                            p,
-                            Id::unique("add-project/clone-target"),
-                        )
-                        .changed();
-                    },
-                );
-                if widgets::ghost_button(ui, "Browse…", None, p).clicked()
-                    && let Some(folder) = rfd::FileDialog::new().pick_folder()
-                {
-                    state.clone_target = display_path(&folder);
-                    state.sync_clone_listing(projects);
-                }
+                widgets::section_label(ui, "Clone into", p);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::ghost_button(ui, "Browse…", Some(Icon::FolderOpen), p).clicked()
+                        && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    {
+                        state.clone_target = display_path(&folder);
+                        state.sync_clone_listing(projects);
+                    }
+                });
             });
+            ui.add_space(3.0);
+            target_changed = field_with_icon(
+                ui,
+                &mut state.clone_target,
+                "~/Projects",
+                Icon::FolderOpen,
+                false,
+                true,
+                p,
+                Id::unique("add-project/clone-target"),
+            )
+            .changed();
             ui.add_space(10.0);
             widgets::section_label(ui, "Folder name", p);
             ui.add_space(3.0);
@@ -1248,7 +1245,15 @@ fn folder_row(ui: &mut Ui, p: &Palette, entry: &DirEntry, selected: bool) -> egu
         ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
     if selected {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.selection);
+            .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.active);
+        ui.painter().rect_filled(
+            Rect::from_center_size(
+                Pos2::new(rect.left() + 1.0, rect.center().y),
+                Vec2::new(2.0, (rect.height() - 8.0).max(10.0)),
+            ),
+            CornerRadius::same(1),
+            p.primary,
+        );
     } else if response.hovered() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.hover);
@@ -1260,7 +1265,7 @@ fn folder_row(ui: &mut Ui, p: &Palette, entry: &DirEntry, selected: bool) -> egu
             Pos2::new(rect.left() + 8.0 + CONTENT_GLYPH * 0.5, rect.center().y),
             Vec2::splat(CONTENT_GLYPH),
         ),
-        if selected { p.selection_fg } else { p.fg_muted },
+        if selected { p.fg } else { p.fg_muted },
     );
     let name_x = rect.left() + 8.0 + CONTENT_GLYPH + 9.0;
     let right = if entry.added {
@@ -1282,7 +1287,7 @@ fn folder_row(ui: &mut Ui, p: &Palette, entry: &DirEntry, selected: bool) -> egu
         Pos2::new(name_x, rect.center().y),
         &entry.name,
         theme::font(theme::TEXT_UI_LABEL),
-        if selected { p.selection_fg } else { p.fg },
+        p.fg,
         (right - name_x - 8.0).max(20.0),
     );
     widgets::pointer(ui, &response);
@@ -1569,15 +1574,20 @@ fn field_with_icon(
             .id(id)
             .frame(egui::Frame::NONE)
             .margin(Margin::ZERO)
-            .hint_text(
-                RichText::new(hint)
-                    .font(theme::font(theme::TEXT_UI_LABEL))
-                    .color(p.fg_muted),
-            )
+            .align(egui::Align2::LEFT_CENTER)
             .text_color(p.fg)
             .font(font)
             .desired_width(f32::INFINITY),
     );
+    if value.is_empty() && !focused {
+        ui.painter().text(
+            Pos2::new(rect.left() + 36.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            hint,
+            theme::font(theme::TEXT_UI_LABEL),
+            p.fg_muted,
+        );
+    }
     if response.clicked() {
         edit.request_focus();
     }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use eframe::egui::{self, Align, Layout, Margin, ScrollArea, Ui, Vec2};
+use eframe::egui::{self, Align, Layout, Margin, ScrollArea, Stroke, Ui, Vec2};
 use rchamber_app::Action;
 use rchamber_ext::{BlockResponse, InstalledExtension, Widget};
 
@@ -131,11 +131,19 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                 .get(&id)
                 .map(|error| error.message.clone());
             if let Some(error) = &error {
-                ui.label(
-                    egui::RichText::new(error)
-                        .font(theme::font(theme::TEXT_META))
-                        .color(p.red),
-                );
+                egui::Frame::new()
+                    .fill(p.error_soft)
+                    .stroke(Stroke::new(theme::HAIRLINE, p.error_border))
+                    .corner_radius(egui::CornerRadius::same(theme::radius::MD))
+                    .inner_margin(Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            egui::RichText::new(error)
+                                .font(theme::font(theme::TEXT_META))
+                                .color(p.error_text),
+                        );
+                    });
                 ui.add_space(6.0);
             }
             let Some(widgets) = app.model.extensions.panels.get(&id).cloned() else {

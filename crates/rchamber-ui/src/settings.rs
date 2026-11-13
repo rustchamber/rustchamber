@@ -1,9 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, Align2, Color32, ColorImage, CornerRadius, EventFilter, Id, Key, Layout, Margin,
-    Modifiers, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, TextureHandle, Ui, UiBuilder, Vec2,
+    self, Align, Align2, Color32, CornerRadius, EventFilter, Id, Key, Layout, Margin,
+    Modifiers, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2,
 };
 use rchamber_api::models::{Agent, Command, Model, Provider, Skill};
 use rchamber_app::format::compact_number;
@@ -21,9 +20,9 @@ use crate::theme_store::{
 };
 use crate::widgets;
 
-const NAV_WIDTH: f32 = 280.0;
+const NAV_WIDTH: f32 = 248.0;
 const NAV_PAD: f32 = 12.0;
-const NAV_ROW_HEIGHT: f32 = 40.0;
+const NAV_ROW_HEIGHT: f32 = 34.0;
 const NAV_ROW_GAP: f32 = 2.0;
 const NAV_GROUP_HEIGHT: f32 = 19.0;
 const NAV_GROUP_TOP: f32 = 20.0;
@@ -46,6 +45,8 @@ const CONTROL_MAX_WIDTH: f32 = 384.0;
 const CARD_PADDING: f32 = 16.0;
 const CARD_GAP: f32 = 12.0;
 const CARD_MIN_HEIGHT: f32 = 132.0;
+const CARD_GAP_SETTINGS: f32 = 16.0;
+const SETTINGS_GRID_MIN: f32 = 560.0;
 const CARD_COLUMNS_WIDE: f32 = 768.0;
 const CARD_COLUMNS_MEDIUM: f32 = 576.0;
 const LIST_ROW_HEIGHT: f32 = 34.0;
@@ -75,11 +76,8 @@ const WINDOW_EDGE_GAP: f32 = 24.0;
 const MODAL_SCALE_FROM: f32 = 0.98;
 const REOPEN_AFTER: f64 = 0.25;
 
-const BACKDROP_DOWNSAMPLE: usize = 6;
-const BACKDROP_BLUR_RADIUS: usize = 4;
-const BACKDROP_BLUR_PASSES: usize = 3;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 enum Section {
     #[default]
     General,
@@ -92,6 +90,7 @@ enum Section {
     Agents,
     Commands,
     Skills,
+    Compute,
 }
 
 impl Section {
@@ -107,7 +106,20 @@ impl Section {
             Section::Agents => Icon::Bot,
             Section::Commands => Icon::Terminal,
             Section::Skills => Icon::File,
+            Section::Compute => Icon::Spark,
         }
+    }
+}
+
+fn nav_title(section: Section) -> &'static str {
+    match section {
+        Section::General => "General & OpenCode Server",
+        Section::Appearance => "Appearance & Theme Engine",
+        Section::Compute => "Compute & Quotas",
+        Section::Shortcuts => "Shortcuts & Keymap",
+        Section::Extensions => "Extensions (Lua 5.4)",
+        Section::About => "Privacy & Audit Log",
+        _ => "",
     }
 }
 
@@ -138,7 +150,7 @@ pub struct Page {
     keywords: &'static [&'static str],
 }
 
-pub static PAGES: [Page; 10] = [
+pub static PAGES: [Page; 11] = [
     Page {
         section: Section::General,
         label: "General",
@@ -255,6 +267,27 @@ pub static PAGES: [Page; 10] = [
         group: Group::OpenCode,
         keywords: &["skill", "skills", "instructions", "tools"],
     },
+    Page {
+        section: Section::Compute,
+        label: "Compute & Quotas",
+        description: "Local keys, managed compute pass, quotas, and the server endpoint.",
+        group: Group::General,
+        keywords: &[
+            "compute",
+            "quota",
+            "quotas",
+            "usage",
+            "byok",
+            "managed",
+            "pass",
+            "billing",
+            "telemetry",
+            "privacy",
+            "fallback",
+            "endpoint",
+            "local",
+        ],
+    },
 ];
 
 pub fn open_page(ctx: &egui::Context, index: usize) {
@@ -269,6 +302,36 @@ fn current_section(ctx: &egui::Context) -> Section {
         section
     } else {
         Section::default()
+    }
+}
+
+fn nav_rank(section: Section) -> u8 {
+    match section {
+        Section::General => 0,
+        Section::Appearance => 1,
+        Section::Compute => 2,
+        Section::Shortcuts => 3,
+        Section::About => 4,
+        Section::Projects => 5,
+        Section::Extensions => 6,
+        Section::Providers => 7,
+        Section::Agents => 8,
+        Section::Commands => 9,
+        Section::Skills => 10,
+    }
+}
+
+fn nav_pages(group: Group) -> Vec<&'static Page> {
+    let mut pages: Vec<&'static Page> = PAGES.iter().filter(|page| page.group == group).collect();
+    pages.sort_by_key(|page| nav_rank(page.section));
+    pages
+}
+
+fn nav_chip(section: Section, extensions: usize) -> Option<String> {
+    match section {
+        Section::Compute => Some("Local".into()),
+        Section::Extensions if extensions > 0 => Some(extensions.to_string()),
+        _ => None,
     }
 }
 
@@ -308,144 +371,7 @@ fn overlay_id() -> Id {
     Id::unique("settings/overlay")
 }
 
-fn backdrop_image_id() -> Id {
-    Id::unique("settings/backdrop.image")
-}
-
-fn backdrop_texture_id() -> Id {
-    Id::unique("settings/backdrop.texture")
-}
-
-fn backdrop_generation_id() -> Id {
-    Id::unique("settings/backdrop.generation")
-}
-
-fn clear_backdrop(ctx: &egui::Context) {
-    ctx.data_mut(|data| {
-        data.remove::<Arc<ColorImage>>(backdrop_image_id());
-        data.remove::<TextureHandle>(backdrop_texture_id());
-        data.remove::<f64>(backdrop_generation_id());
-    });
-}
-
-fn request_backdrop(ctx: &egui::Context, generation: f64) {
-    set(ctx, backdrop_generation_id(), generation);
-    let context = ctx.clone();
-    ctx.request_screenshot(move |image| {
-        let current = context.data(|data| data.get_temp::<f64>(backdrop_generation_id()));
-        if current != Some(generation) {
-            return;
-        }
-        let image = Arc::new(blur_backdrop(&image));
-        context.data_mut(|data| data.insert_temp(backdrop_image_id(), image));
-        context.request_repaint();
-    });
-}
-
-fn backdrop_texture(ctx: &egui::Context) -> Option<TextureHandle> {
-    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(backdrop_texture_id())) {
-        return Some(texture);
-    }
-    let image = ctx.data(|data| data.get_temp::<Arc<ColorImage>>(backdrop_image_id()))?;
-    let texture = ctx.load_texture("settings/backdrop", image, egui::TextureOptions::LINEAR);
-    ctx.data_mut(|data| data.insert_temp(backdrop_texture_id(), texture.clone()));
-    Some(texture)
-}
-
-fn blur_backdrop(image: &ColorImage) -> ColorImage {
-    let [source_width, source_height] = image.size;
-    if source_width == 0 || source_height == 0 {
-        return ColorImage::filled([1, 1], Color32::BLACK);
-    }
-    let width = (source_width / BACKDROP_DOWNSAMPLE).max(1);
-    let height = (source_height / BACKDROP_DOWNSAMPLE).max(1);
-    let mut pixels = vec![[0.0_f32; 4]; width * height];
-    for y in 0..height {
-        let top = y * source_height / height;
-        let bottom = (((y + 1) * source_height) / height)
-            .max(top + 1)
-            .min(source_height);
-        for x in 0..width {
-            let left = x * source_width / width;
-            let right = (((x + 1) * source_width) / width)
-                .max(left + 1)
-                .min(source_width);
-            let mut sum = [0.0_f32; 4];
-            for row in top..bottom {
-                for column in left..right {
-                    let color = image.pixels[row * source_width + column];
-                    sum[0] += color.r() as f32;
-                    sum[1] += color.g() as f32;
-                    sum[2] += color.b() as f32;
-                    sum[3] += color.a() as f32;
-                }
-            }
-            let count = ((bottom - top) * (right - left)) as f32;
-            pixels[y * width + x] = [
-                sum[0] / count,
-                sum[1] / count,
-                sum[2] / count,
-                sum[3] / count,
-            ];
-        }
-    }
-    for _ in 0..BACKDROP_BLUR_PASSES {
-        pixels = box_blur(&pixels, width, height, BACKDROP_BLUR_RADIUS);
-    }
-    let pixels = pixels
-        .into_iter()
-        .map(|color| {
-            Color32::from_rgba_premultiplied(
-                color[0].round().clamp(0.0, 255.0) as u8,
-                color[1].round().clamp(0.0, 255.0) as u8,
-                color[2].round().clamp(0.0, 255.0) as u8,
-                color[3].round().clamp(0.0, 255.0) as u8,
-            )
-        })
-        .collect();
-    ColorImage::new([width, height], pixels)
-}
-
-fn box_blur(source: &[[f32; 4]], width: usize, height: usize, radius: usize) -> Vec<[f32; 4]> {
-    let mut horizontal = vec![[0.0_f32; 4]; source.len()];
-    let mut output = vec![[0.0_f32; 4]; source.len()];
-    for y in 0..height {
-        let row = y * width;
-        for x in 0..width {
-            let left = x.saturating_sub(radius);
-            let right = (x + radius).min(width - 1);
-            let mut sum = [0.0_f32; 4];
-            for column in left..=right {
-                for (channel, value) in sum.iter_mut().enumerate() {
-                    *value += source[row + column][channel];
-                }
-            }
-            let count = (right - left + 1) as f32;
-            for (channel, value) in horizontal[row + x].iter_mut().enumerate() {
-                *value = sum[channel] / count;
-            }
-        }
-    }
-    for y in 0..height {
-        let top = y.saturating_sub(radius);
-        let bottom = (y + radius).min(height - 1);
-        let count = (bottom - top + 1) as f32;
-        for x in 0..width {
-            let mut sum = [0.0_f32; 4];
-            for row in top..=bottom {
-                for (channel, value) in sum.iter_mut().enumerate() {
-                    *value += horizontal[row * width + x][channel];
-                }
-            }
-            for (channel, value) in output[y * width + x].iter_mut().enumerate() {
-                *value = sum[channel] / count;
-            }
-        }
-    }
-    output
-}
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Overlay {
     open: bool,
     opened_at: f64,
@@ -454,20 +380,6 @@ struct Overlay {
     prev_focus: Option<Id>,
     search: String,
     search_index: usize,
-}
-
-impl Default for Overlay {
-    fn default() -> Self {
-        Self {
-            open: false,
-            opened_at: 0.0,
-            closed_at: None,
-            last_seen: 0.0,
-            prev_focus: None,
-            search: String::new(),
-            search_index: 0,
-        }
-    }
 }
 
 fn presence(now: f64, opened_at: f64, closed_at: Option<f64>, duration: f32) -> f32 {
@@ -504,8 +416,6 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
     overlay.last_seen = now;
 
     if overlay.opened_at == now {
-        clear_backdrop(ctx);
-        request_backdrop(ctx, overlay.opened_at);
         set(
             ctx,
             Id::unique("settings.density.compact"),
@@ -575,6 +485,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         p.primary = accent;
     }
     let mut section = current_section(ctx);
+    let extensions = app.model.extensions.installed.len();
     let mut next_section: Option<Section> = None;
     let mut close = false;
 
@@ -588,26 +499,13 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         .clamp(WINDOW_MIN_HEIGHT.min(max_height), WINDOW_MAX_HEIGHT)
         .min(max_height);
 
-    let alpha = ((if p.dark { 102.0 } else { 64.0 }) * t)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-    let opacity = (255.0 * t).round().clamp(0.0, 255.0) as u8;
-    let blur = backdrop_texture(ctx);
+    let scrim = p.fade(p.scrim(), t);
     egui::Area::new(Id::unique("settings/backdrop"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .interactable(false)
         .show(ctx, |ui| {
-            if let Some(blur) = &blur {
-                ui.painter().image(
-                    blur.id(),
-                    screen,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    Color32::from_white_alpha(opacity),
-                );
-            }
-            ui.painter()
-                .rect_filled(screen, 0.0, Color32::from_black_alpha(alpha));
+            ui.painter().rect_filled(screen, 0.0, scrim);
         });
 
     let shadow = egui::epaint::Shadow {
@@ -687,14 +585,16 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                     if needle.is_empty() {
                         for group in Group::ALL {
-                            let pages: Vec<&Page> =
-                                PAGES.iter().filter(|page| page.group == group).collect();
+                            let pages = nav_pages(group);
                             if pages.is_empty() {
                                 continue;
                             }
                             nav_group_heading(ui, &p, group.label());
                             for page in pages {
-                                if nav_row(ui, &p, page, page.section == section).clicked() {
+                                let chip = nav_chip(page.section, extensions);
+                                if nav_row(ui, &p, page, page.section == section, chip.as_deref())
+                                    .clicked()
+                                {
                                     next_section = Some(page.section);
                                 }
                                 ui.add_space(NAV_ROW_GAP);
@@ -725,6 +625,8 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                             if group_results.is_empty() {
                                 continue;
                             }
+                            let mut group_results = group_results;
+                            group_results.sort_by_key(|(_, page)| nav_rank(page.section));
                             nav_group_heading(ui, &p, group.label());
                             for (index, page) in group_results {
                                 let active = index == overlay.search_index;
@@ -761,6 +663,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                         Section::Agents => agents(ui, app, &p),
                         Section::Commands => commands(ui, app, &p),
                         Section::Skills => skills(ui, app, &p),
+                        Section::Compute => compute(ui, app, &p),
                     });
                 });
 
@@ -825,7 +728,6 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
     }
     if closing && t <= 0.0001 {
         ctx.set_transform_layer(layer, egui::emath::TSTransform::IDENTITY);
-        clear_backdrop(ctx);
         if !app.ui.palette_open
             && let Some(previous) = overlay.prev_focus
         {
@@ -893,11 +795,7 @@ fn nav_search(ui: &mut Ui, p: &Palette, query: &mut String, id: Id, rect: Rect) 
         .id(id)
         .frame(egui::Frame::NONE)
         .margin(Margin::ZERO)
-        .hint_text(
-            RichText::new("Search settings")
-                .font(theme::font(theme::TEXT_UI_LABEL))
-                .color(p.fg_muted),
-        )
+        .align(egui::Align2::LEFT_CENTER)
         .text_color(p.fg)
         .font(theme::font(theme::TEXT_UI_LABEL))
         .desired_width(f32::INFINITY);
@@ -924,6 +822,15 @@ fn nav_search(ui: &mut Ui, p: &Palette, query: &mut String, id: Id, rect: Rect) 
         if clear_response.clicked() {
             query.clear();
         }
+    }
+    if query.is_empty() && !focused {
+        ui.painter().text(
+            Pos2::new(rect.left() + 34.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            "Search settings",
+            theme::font(theme::TEXT_UI_LABEL),
+            p.fg_muted,
+        );
     }
     ui.ctx().memory_mut(|memory| {
         memory.set_focus_lock_filter(
@@ -954,7 +861,13 @@ fn nav_group_heading(ui: &mut Ui, p: &Palette, label: &str) {
     ui.add_space(NAV_GROUP_BOTTOM);
 }
 
-fn nav_row(ui: &mut Ui, p: &Palette, page: &Page, active: bool) -> egui::Response {
+fn nav_row(
+    ui: &mut Ui,
+    p: &Palette,
+    page: &Page,
+    active: bool,
+    chip: Option<&str>,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), NAV_ROW_HEIGHT),
         Sense::click(),
@@ -983,17 +896,59 @@ fn nav_row(ui: &mut Ui, p: &Palette, page: &Page, active: bool) -> egui::Respons
         ),
         if active { p.fg } else { p.fg_muted },
     );
+    let chip_width = chip
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    label.to_string(),
+                    theme::font_mono(theme::TEXT_TAG),
+                    p.fg_muted,
+                )
+                .size()
+                .x
+                + 14.0
+        })
+        .unwrap_or(0.0);
+    let title = nav_title(page.section);
+    let title = if title.is_empty() { page.label } else { title };
     let label_rect = Rect::from_min_max(
         Pos2::new(rect.left() + 32.0, rect.top()),
-        Pos2::new(rect.right() - 8.0, rect.bottom()),
+        Pos2::new(rect.right() - 8.0 - chip_width, rect.bottom()),
     );
     ui.painter().with_clip_rect(label_rect).text(
         Pos2::new(rect.left() + 32.0, rect.center().y),
         Align2::LEFT_CENTER,
-        page.label,
+        title,
         theme::font(theme::TEXT_UI_LABEL),
         p.fg,
     );
+    if let Some(label) = chip {
+        let galley = ui.painter().layout_no_wrap(
+            label.to_string(),
+            theme::font_mono(theme::TEXT_TAG),
+            p.fg_muted,
+        );
+        let chip_rect = Rect::from_min_size(
+            Pos2::new(
+                rect.right() - 8.0 - galley.size().x - 12.0,
+                rect.center().y - theme::TAG_HEIGHT * 0.5,
+            ),
+            Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        );
+        ui.painter().rect_filled(
+            chip_rect,
+            CornerRadius::same(theme::radius::XS),
+            p.tag_bg,
+        );
+        ui.painter().galley(
+            Pos2::new(
+                chip_rect.left() + 6.0,
+                chip_rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            p.fg_muted,
+        );
+    }
     response
 }
 
@@ -1650,61 +1605,6 @@ fn parse_hex(text: &str) -> Option<Color32> {
     None
 }
 
-fn hex(color: Color32) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
-}
-
-fn accent_field(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    let base = if p.dark {
-        Palette::dark()
-    } else {
-        Palette::light()
-    };
-    let swatches = [
-        ("Amber", base.primary),
-        ("Blue", base.blue),
-        ("Green", base.green),
-        ("Purple", base.purple),
-        ("Coral", base.coral),
-    ];
-    let current = app.settings.accent.as_deref().and_then(parse_hex);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        for (name, color) in swatches {
-            let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(theme::radius::INLINE_CODE), color);
-            let selected = current
-                .map(|accent| accent.to_array() == color.to_array())
-                .unwrap_or(color.to_array() == base.primary.to_array());
-            if selected {
-                ui.painter().rect_stroke(
-                    rect.expand(2.0),
-                    CornerRadius::same(theme::radius::MD),
-                    Stroke::new(theme::BORDER, p.fg),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if response.on_hover_text(name).clicked() {
-                app.settings.accent = Some(hex(color));
-                app.settings.save();
-                app.apply_theme(ui.ctx());
-            }
-        }
-        if app.settings.accent.is_some() {
-            let reset = widgets::icon_button_hit(ui, Icon::Refresh, 13.0, 28.0, p.fg_muted);
-            if reset.on_hover_text("Reset").clicked() {
-                app.settings.accent = None;
-                app.settings.save();
-                app.apply_theme(ui.ctx());
-            }
-        }
-    });
-}
-
 fn appearance_options(list: &[(&str, &str)]) -> Vec<(String, String)> {
     list.iter()
         .map(|(id, label)| ((*id).to_string(), (*label).to_string()))
@@ -1719,23 +1619,25 @@ fn appearance_section(
     add: impl FnOnce(&mut Ui),
 ) {
     if divider {
-        ui.add_space(12.0);
-        let rect = ui.available_rect_before_wrap();
-        let y = ui.cursor().top();
-        ui.painter().hline(
-            rect.left()..=rect.right(),
-            y,
-            Stroke::new(theme::BORDER, p.edge_color()),
-        );
-        ui.add_space(12.0 + theme::BORDER);
+        ui.add_space(CARD_GAP_SETTINGS);
     }
-    ui.label(
-        RichText::new(title)
-            .font(theme::font_semibold(theme::TEXT_UI_LABEL))
-            .color(p.fg),
-    );
-    ui.add_space(APPEARANCE_TITLE_GAP);
-    add(ui);
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border))
+        .corner_radius(theme::radius::XL)
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.label(
+                RichText::new(title)
+                    .font(theme::font_semibold(theme::TEXT_UI_LABEL))
+                    .color(p.fg),
+            );
+            ui.add_space(APPEARANCE_TITLE_GAP);
+            add(ui);
+        });
+    ui.add_space(CARD_GAP_SETTINGS);
 }
 
 fn appearance_columns(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
@@ -1890,6 +1792,50 @@ fn brightness_control(ui: &mut Ui, value: &mut f32, p: &Palette) -> egui::Respon
 fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     page_header(ui, p, "Appearance", "Theme, type, spacing, and motion.");
 
+    let mut mode = match app.settings.theme {
+        theme::ThemeMode::Light => 0usize,
+        theme::ThemeMode::Dark => 1,
+        theme::ThemeMode::System => 2,
+    };
+    let accent = app
+        .settings
+        .accent
+        .as_deref()
+        .and_then(parse_hex)
+        .unwrap_or(p.primary);
+    appearance_section(ui, p, "Color scheme", false, |ui| {
+        appearance_inline_row(ui, p, "Theme mode", 236.0, |ui| {
+            if widgets::segmented(ui, &["Light", "Dark", "System"], &mut mode, p) {
+                app.settings.theme = match mode {
+                    0 => theme::ThemeMode::Light,
+                    1 => theme::ThemeMode::Dark,
+                    _ => theme::ThemeMode::System,
+                };
+                commit_appearance(app, ui.ctx());
+            }
+        });
+        ui.add_space(6.0);
+        let hex = format!("#{:02x}{:02x}{:02x}", accent.r(), accent.g(), accent.b());
+        appearance_inline_row(ui, p, "Brand accent", 152.0, |ui| {
+            let (swatch, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+            ui.painter()
+                .circle_filled(swatch.center(), 9.0, accent);
+            ui.painter().circle_stroke(
+                swatch.center(),
+                9.0,
+                Stroke::new(theme::BORDER, p.fg),
+            );
+            ui.add_space(2.0);
+            widgets::tag_chip(ui, &hex, p);
+        });
+        ui.add_space(6.0);
+        muted(
+            ui,
+            p,
+            "Light and dark palettes share the same semantic tokens and enforce a 4.5:1 contrast floor.",
+        );
+    });
+
     let light_options = theme_store::theme_options(false);
     let dark_options = theme_store::theme_options(true);
     let mut light_theme = app.settings.appearance.light_theme.clone();
@@ -1927,13 +1873,6 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         if theme_changed {
             commit_appearance(app, ui.ctx());
         }
-        ui.add_space(2.0);
-        let accent_width = if app.settings.accent.is_some() {
-            188.0
-        } else {
-            152.0
-        };
-        appearance_inline_row(ui, p, "Accent", accent_width, |ui| accent_field(ui, app, p));
     });
 
     appearance_section(ui, p, "Brightness", true, |ui| {
@@ -2011,6 +1950,35 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         .unwrap_or(0);
     let mut animated = appearance_settings.animated;
     appearance_section(ui, p, "Density and typography", true, |ui| {
+        let mut density = if app.settings.compact_density { 1usize } else { 0 };
+        appearance_inline_row(ui, p, "UI density", 236.0, |ui| {
+            if widgets::segmented(ui, &["Default", "Compact"], &mut density, p) {
+                app.settings.compact_density = density == 1;
+                set(
+                    ui.ctx(),
+                    Id::unique("settings.density.compact"),
+                    app.settings.compact_density,
+                );
+                app.settings.save();
+            }
+        });
+        ui.add_space(6.0);
+        let mut reduced_motion = app.settings.reduce_motion;
+        appearance_inline_row(ui, p, "Reduced motion", 20.0, |ui| {
+            if widgets::checkbox(ui, &mut reduced_motion, p).clicked() {
+                app.settings.reduce_motion = reduced_motion;
+                animated = !reduced_motion;
+                motion::set_reduced_motion(reduced_motion);
+                app.settings.save();
+            }
+        });
+        ui.add_space(6.0);
+        muted(
+            ui,
+            p,
+            "Compact density uses 28px list rows; reduced motion stops transitions.",
+        );
+        ui.add_space(16.0);
         appearance_columns(
             ui,
             |ui| {
@@ -2174,7 +2142,7 @@ fn provider_cards(
     app: &RustChamber,
     providers: &[&Provider],
     p: &Palette,
-) -> Option<String> {
+) -> (Option<String>, Option<String>) {
     let width = ui.available_width();
     let pane = pane_width(ui);
     let columns = if pane >= CARD_COLUMNS_WIDE {
@@ -2186,6 +2154,7 @@ fn provider_cards(
     };
     let card_width = ((width - CARD_GAP * (columns - 1) as f32) / columns as f32).max(0.0);
     let mut opened = None;
+    let mut hidden = None;
     for chunk in providers.chunks(columns) {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = CARD_GAP;
@@ -2196,14 +2165,31 @@ fn provider_cards(
                     .iter()
                     .filter(|model| model.provider_id == provider.id)
                     .count();
-                if provider_card(ui, provider, models, card_width, p).clicked() {
+                let response = provider_card(ui, provider, models, card_width, p);
+                if response.clicked() {
                     opened = Some(provider.id.clone());
                 }
+                let id = provider.id.clone();
+                response.context_menu(|ui| {
+                    ui.set_min_width(196.0);
+                    if widgets::menu_item(
+                        ui,
+                        "Remove from RustChamber",
+                        Some(Icon::Trash),
+                        None,
+                        p,
+                    )
+                    .clicked()
+                    {
+                        hidden = Some(id.clone());
+                        ui.close();
+                    }
+                });
             }
         });
         ui.add_space(CARD_GAP);
     }
-    opened
+    (opened, hidden)
 }
 
 fn provider_card(
@@ -2315,7 +2301,8 @@ fn provider_card(
     response
 }
 
-fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
+fn providers(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
+    let hidden = app.settings.hidden_providers.clone();
     let mut rows = app.model.providers.clone();
     if rows.is_empty() {
         for model in &app.model.models {
@@ -2330,6 +2317,7 @@ fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
             }
         }
     }
+    rows.retain(|provider| !hidden.iter().any(|id| id.eq_ignore_ascii_case(&provider.id)));
     rows.sort_by(|a, b| {
         provider_name(a)
             .to_lowercase()
@@ -2343,14 +2331,27 @@ fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
     }
     if !selected.is_empty() {
         if let Some(provider) = rows.iter().find(|provider| provider.id == selected) {
-            if provider_detail(ui, app, provider, p) {
-                selected.clear();
-                set(ui.ctx(), selection_id, selected.clone());
-                set(
-                    ui.ctx(),
-                    Id::unique(("settings.search", "provider.models")),
-                    String::new(),
-                );
+            match provider_detail(ui, app, provider, p) {
+                ProviderAction::Back => {
+                    selected.clear();
+                    set(ui.ctx(), selection_id, selected.clone());
+                    set(
+                        ui.ctx(),
+                        Id::unique(("settings.search", "provider.models")),
+                        String::new(),
+                    );
+                }
+                ProviderAction::Hide => {
+                    hide_provider(app, &provider.id);
+                    selected.clear();
+                    set(ui.ctx(), selection_id, selected.clone());
+                    set(
+                        ui.ctx(),
+                        Id::unique(("settings.search", "provider.models")),
+                        String::new(),
+                    );
+                }
+                ProviderAction::None => {}
             }
             return;
         }
@@ -2361,10 +2362,11 @@ fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
         ui,
         p,
         "Providers",
-        "Model providers OpenCode can use. Open one to browse its models.",
+        "Model providers OpenCode can use. Open one to browse its models, or right-click to remove it from RustChamber.",
     );
     if rows.is_empty() {
         muted(ui, p, "No providers reported yet.");
+        show_hidden_providers(ui, app, p);
         return;
     }
     let query = search_state(ui, "providers", "Search providers", p);
@@ -2376,10 +2378,21 @@ fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
     if filtered.is_empty() {
         ui.add_space(16.0);
         muted(ui, p, &format!("No providers match “{}”.", query.trim()));
+        show_hidden_providers(ui, app, p);
         return;
     }
     ui.add_space(16.0);
-    if let Some(opened) = provider_cards(ui, app, &filtered, p) {
+    let (opened, hide) = provider_cards(ui, app, &filtered, p);
+    if let Some(id) = hide {
+        hide_provider(app, &id);
+        set(ui.ctx(), selection_id, String::new());
+        set(
+            ui.ctx(),
+            Id::unique(("settings.search", "provider.models")),
+            String::new(),
+        );
+    }
+    if let Some(opened) = opened {
         set(ui.ctx(), selection_id, opened);
         set(
             ui.ctx(),
@@ -2387,10 +2400,53 @@ fn providers(ui: &mut Ui, app: &RustChamber, p: &Palette) {
             String::new(),
         );
     }
+    show_hidden_providers(ui, app, p);
 }
 
-fn provider_detail(ui: &mut Ui, app: &RustChamber, provider: &Provider, p: &Palette) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderAction {
+    None,
+    Back,
+    Hide,
+}
+
+fn hide_provider(app: &mut RustChamber, id: &str) {
+    if !app
+        .settings
+        .hidden_providers
+        .iter()
+        .any(|hidden| hidden.eq_ignore_ascii_case(id))
+    {
+        app.settings.hidden_providers.push(id.to_string());
+        app.settings.save();
+    }
+}
+
+fn show_hidden_providers(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
+    let count = app.settings.hidden_providers.len();
+    if count == 0 {
+        return;
+    }
+    ui.add_space(12.0);
+    let label = if count == 1 {
+        "Show 1 hidden provider".to_string()
+    } else {
+        format!("Show {count} hidden providers")
+    };
+    if widgets::link_button(ui, &label, None, p).clicked() {
+        app.settings.hidden_providers.clear();
+        app.settings.save();
+    }
+}
+
+fn provider_detail(
+    ui: &mut Ui,
+    app: &RustChamber,
+    provider: &Provider,
+    p: &Palette,
+) -> ProviderAction {
     let mut back = false;
+    let mut hide = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         if widgets::icon_button_hit(ui, Icon::ChevronLeft, 14.0, 28.0, p.fg_muted)
@@ -2412,6 +2468,13 @@ fn provider_detail(ui: &mut Ui, app: &RustChamber, provider: &Provider, p: &Pale
                 .font(theme::font_semibold(theme::TEXT_PAGE_TITLE))
                 .color(p.fg_muted),
         );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::ghost_button(ui, "Remove from RustChamber", Some(Icon::Trash), p)
+                .clicked()
+            {
+                hide = true;
+            }
+        });
     });
     ui.add_space(4.0);
     description_text(ui, p, &provider.id, theme::font_mono(theme::TEXT_META));
@@ -2474,7 +2537,13 @@ fn provider_detail(ui: &mut Ui, app: &RustChamber, provider: &Provider, p: &Pale
             model_row(ui, model, p);
         }
     });
-    back
+    if hide {
+        ProviderAction::Hide
+    } else if back {
+        ProviderAction::Back
+    } else {
+        ProviderAction::None
+    }
 }
 
 fn model_row(ui: &mut Ui, model: &Model, p: &Palette) {
@@ -2689,6 +2758,328 @@ fn commands(ui: &mut Ui, app: &RustChamber, p: &Palette) {
     }
 }
 
+fn settings_card_width(columns: usize, width: f32) -> f32 {
+    if columns <= 1 {
+        width
+    } else {
+        ((width - CARD_GAP_SETTINGS * (columns - 1) as f32) / columns as f32).max(0.0)
+    }
+}
+
+fn settings_card(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border))
+        .corner_radius(theme::radius::XL)
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            add(ui);
+        });
+}
+
+fn settings_columns(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
+    let width = ui.available_width();
+    if width >= SETTINGS_GRID_MIN {
+        let column = settings_card_width(2, width);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = CARD_GAP_SETTINGS;
+            ui.allocate_ui_with_layout(
+                Vec2::new(column, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(column);
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    left(ui);
+                },
+            );
+            ui.allocate_ui_with_layout(
+                Vec2::new(column, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(column);
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    right(ui);
+                },
+            );
+        });
+    } else {
+        left(ui);
+        ui.add_space(CARD_GAP_SETTINGS);
+        right(ui);
+    }
+}
+
+fn card_heading(ui: &mut Ui, p: &Palette, title: &str, description: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            ui.label(
+                RichText::new(title)
+                    .font(theme::font_semibold(theme::TEXT_UI_HEADER))
+                    .color(p.fg),
+            );
+            if !description.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(description)
+                            .font(theme::font(theme::TEXT_MICRO))
+                            .color(p.fg_muted),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+    });
+}
+
+fn card_row(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    description: &str,
+    add: impl FnOnce(&mut Ui),
+) {
+    let width = ui.available_width();
+    let top = ui.cursor().top();
+    ui.painter()
+        .hline(ui.cursor().left()..=(ui.cursor().left() + width), top, p.hairline());
+    ui.add_space(12.0);
+    let text_width = (width - 128.0).max(80.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.allocate_ui_with_layout(
+            Vec2::new(text_width, 0.0),
+            Layout::top_down(Align::Min),
+            |ui| {
+                ui.set_width(text_width);
+                ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(label)
+                            .font(theme::font(theme::TEXT_UI_LABEL))
+                            .color(p.fg),
+                    )
+                    .truncate(),
+                );
+                if !description.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(description)
+                                .font(theme::font(theme::TEXT_MICRO))
+                                .color(p.fg_muted),
+                        )
+                        .wrap(),
+                    );
+                }
+            },
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            add(ui);
+        });
+    });
+    ui.add_space(12.0);
+}
+
+fn status_chip(ui: &mut Ui, label: &str, fg: Color32, bg: Color32) {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
+    ui.painter().galley(
+        Pos2::new(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        fg,
+    );
+}
+
+fn quota_meter(ui: &mut Ui, p: &Palette, fraction: f32) {
+    let lowered = fraction.clamp(0.0, 1.0);
+    egui::Frame::new()
+        .fill(p.bg_soft)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border))
+        .corner_radius(theme::radius::MD)
+        .inner_margin(Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Managed pass quota")
+                        .font(theme::font_semibold(theme::TEXT_MICRO))
+                        .color(p.fg),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(if lowered > 0.0 {
+                            format!("{:.0}%", lowered * 100.0)
+                        } else {
+                            "Not enabled".into()
+                        })
+                        .font(theme::font_mono(theme::TEXT_MICRO))
+                        .color(p.fg_muted),
+                    );
+                });
+            });
+            ui.add_space(8.0);
+            let width = ui.available_width();
+            let (track, _) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
+            ui.painter()
+                .rect_filled(track, CornerRadius::same(3), p.border);
+            if lowered > 0.0 {
+                let fill = Rect::from_min_size(
+                    track.min,
+                    Vec2::new((width * lowered).max(3.0), 6.0),
+                );
+                ui.painter()
+                    .rect_filled(fill, CornerRadius::same(3), p.primary);
+            }
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(
+                    RichText::new("Resets when a pass is active")
+                        .font(theme::font(11.5))
+                        .color(p.fg_faint),
+                );
+                ui.label(
+                    RichText::new("Auto-fallback to local keys")
+                        .font(theme::font(11.5))
+                        .color(p.success_text),
+                );
+            });
+        });
+}
+
+fn compute(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
+    page_header(
+        ui,
+        p,
+        "Compute & Quotas",
+        "Local keys with zero account, or a managed compute pass.",
+    );
+    let endpoint = if app.ui.settings_endpoint.trim().is_empty() {
+        app.model
+            .server
+            .as_ref()
+            .and_then(|server| server.urls.first().cloned())
+            .unwrap_or_else(|| "Managed child process".into())
+    } else {
+        app.ui.settings_endpoint.clone()
+    };
+    let (connection, color) = match &app.model.connection {
+        Connection::Ready => ("Connected", p.green),
+        Connection::Connecting => ("Starting", p.primary),
+        Connection::Reconnecting(_) => ("Reconnecting", p.coral),
+        Connection::Failed(_) => ("Offline", p.red),
+        Connection::Disconnected => ("Disconnected", p.fg_muted),
+    };
+    let managed = app.ui.settings_endpoint.trim().is_empty();
+    settings_columns(
+        ui,
+        |ui| {
+            settings_card(ui, p, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(
+                        RichText::new("Compute & provider quotas")
+                            .font(theme::font_semibold(theme::TEXT_UI_HEADER))
+                            .color(p.fg),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        status_chip(ui, "No telemetry", p.success_text, p.success_soft);
+                    });
+                });
+                ui.add_space(2.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Requests go straight to your provider keys unless a managed pass is enabled.",
+                        )
+                        .font(theme::font(theme::TEXT_MICRO))
+                        .color(p.fg_muted),
+                    )
+                    .wrap(),
+                );
+                card_row(
+                    ui,
+                    p,
+                    "Primary routing mode",
+                    if managed {
+                        "Direct connection to the managed local process"
+                    } else {
+                        "Direct connection to the configured endpoint"
+                    },
+                    |ui| {
+                        status_chip(ui, "BYOK", p.fg_muted, p.tag_bg);
+                    },
+                );
+                quota_meter(ui, p, 0.0);
+                ui.add_space(12.0);
+            });
+        },
+        |ui| {
+            settings_card(ui, p, |ui| {
+                card_heading(
+                    ui,
+                    p,
+                    "OpenCode server",
+                    "Loopback only: RustChamber never exposes the server to the network.",
+                );
+                card_row(
+                    ui,
+                    p,
+                    "Endpoint",
+                    if managed {
+                        "Managed child process supervised by RustChamber"
+                    } else {
+                        "External server; RustChamber only connects"
+                    },
+                    |ui| {
+                        if widgets::app_button(
+                            ui,
+                            "Restart",
+                            Some(Icon::Refresh),
+                            widgets::ButtonVariant::Outline,
+                            p,
+                        )
+                        .clicked()
+                        {
+                            app.backend.send(Action::Reconnect);
+                        }
+                        status_chip(ui, connection, color, p.tag_bg);
+                    },
+                );
+                card_row(ui, p, "Endpoint address", "", |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&endpoint)
+                                .font(theme::font_mono(theme::TEXT_MICRO))
+                                .color(p.fg_muted),
+                        )
+                        .truncate(),
+                    );
+                });
+                ui.label(
+                    RichText::new(
+                        "Audit events and usage stay on this machine. Nothing is uploaded.",
+                    )
+                    .font(theme::font(11.5))
+                    .color(p.fg_faint),
+                );
+            });
+        },
+    );
+}
+
 fn same_path(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
 }
@@ -2789,7 +3180,6 @@ fn general(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         .server
         .as_ref()
         .map(|server| server.version.clone());
-    let detail = app.model.connection_detail.clone();
     section(ui, p, "Connection", "", None, false, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -2807,10 +3197,6 @@ fn general(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                 );
             }
         });
-        if let Some(detail) = &detail {
-            ui.add_space(4.0);
-            muted(ui, p, detail);
-        }
     });
     section(ui, p, "Server connection", "", None, true, |ui| {
         stacked_field(ui, p, "Endpoint", |ui| {
@@ -3143,6 +3529,20 @@ fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         .as_ref()
         .map(|server| server.version.clone())
         .unwrap_or_else(|| "Unknown".into());
+    section(ui, p, "Privacy and audit", "", None, true, |ui| {
+        value_row(ui, p, "Telemetry", "Off");
+        value_row(ui, p, "Requests", "Direct to your providers");
+        let data = crate::persist::path()
+            .and_then(|path| path.parent().map(|parent| home_relative(parent)))
+            .unwrap_or_else(|| "unavailable".into());
+        value_row(ui, p, "Local data", &data);
+        ui.add_space(8.0);
+        muted(
+            ui,
+            p,
+            "Nothing leaves this machine except the requests your configured providers receive.",
+        );
+    });
     section(ui, p, "", "", None, true, |ui| {
         value_row(ui, p, "Version", crate::update::app_version());
         value_row(ui, p, "OpenCode version", &opencode);
@@ -3224,9 +3624,36 @@ fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::{Color32, ColorImage};
+    use super::{nav_pages, nav_rank, nav_title, shortcut, Group, Section, NAV_WIDTH, PAGES};
 
-    use super::{blur_backdrop, shortcut};
+    #[test]
+    fn settings_sidebar_uses_the_mock_width() {
+        assert_eq!(NAV_WIDTH, 248.0);
+    }
+
+    #[test]
+    fn compute_lands_after_appearance_without_shifting_extensions() {
+        assert_eq!(PAGES.len(), 11);
+        assert_eq!(PAGES[5].section, Section::Extensions);
+        assert!(PAGES.iter().any(|page| page.section == Section::Compute));
+        let order: Vec<Section> = nav_pages(Group::General)
+            .iter()
+            .map(|page| page.section)
+            .collect();
+        assert_eq!(order[0], Section::General);
+        assert_eq!(order[1], Section::Appearance);
+        assert_eq!(order[2], Section::Compute);
+        assert!(nav_rank(Section::Compute) < nav_rank(Section::Shortcuts));
+    }
+
+    #[test]
+    fn nav_titles_follow_the_mock_copy() {
+        assert_eq!(nav_title(Section::General), "General & OpenCode Server");
+        assert_eq!(nav_title(Section::Appearance), "Appearance & Theme Engine");
+        assert_eq!(nav_title(Section::Compute), "Compute & Quotas");
+        assert_eq!(nav_title(Section::Shortcuts), "Shortcuts & Keymap");
+        assert_eq!(nav_title(Section::Extensions), "Extensions (Lua 5.4)");
+    }
 
     #[test]
     fn shortcut_puts_each_modifier_in_its_own_cap() {
@@ -3236,16 +3663,4 @@ mod tests {
         assert_ne!(keys[0], keys[1]);
     }
 
-    #[test]
-    fn backdrop_blur_downsamples_and_keeps_a_flat_color() {
-        let source = ColorImage::filled([60, 36], Color32::from_rgb(120, 60, 30));
-        let blurred = blur_backdrop(&source);
-        assert_eq!(blurred.size, [10, 6]);
-        assert!(blurred.pixels.iter().all(|pixel| {
-            pixel.r().abs_diff(120) <= 1
-                && pixel.g().abs_diff(60) <= 1
-                && pixel.b().abs_diff(30) <= 1
-                && pixel.a() == 255
-        }));
-    }
 }

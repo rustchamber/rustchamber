@@ -68,6 +68,7 @@ pub enum ButtonVariant {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonSize {
+    App,
     Xs,
     Sm,
     Md,
@@ -77,6 +78,7 @@ pub enum ButtonSize {
 impl ButtonSize {
     pub fn height(self) -> f32 {
         match self {
+            ButtonSize::App => theme::BUTTON_HEIGHT,
             ButtonSize::Xs => HIT_XS,
             ButtonSize::Sm => HIT_SM,
             ButtonSize::Md => HIT_MD,
@@ -86,6 +88,7 @@ impl ButtonSize {
 
     pub fn padding(self) -> f32 {
         match self {
+            ButtonSize::App => 10.0,
             ButtonSize::Xs => 8.0,
             ButtonSize::Sm => 10.0,
             ButtonSize::Md => 12.0,
@@ -95,6 +98,7 @@ impl ButtonSize {
 
     pub fn padding_with_icon(self) -> f32 {
         match self {
+            ButtonSize::App => 8.0,
             ButtonSize::Xs => 6.0,
             ButtonSize::Sm => 8.0,
             ButtonSize::Md => 10.0,
@@ -104,6 +108,7 @@ impl ButtonSize {
 
     pub fn gap(self) -> f32 {
         match self {
+            ButtonSize::App => 6.0,
             ButtonSize::Xs => 4.0,
             ButtonSize::Sm => 6.0,
             _ => 8.0,
@@ -112,6 +117,7 @@ impl ButtonSize {
 
     pub fn font_size(self) -> f32 {
         match self {
+            ButtonSize::App => theme::TEXT_BUTTON,
             ButtonSize::Xs => theme::TEXT_MICRO,
             _ => theme::TEXT_UI_LABEL,
         }
@@ -119,17 +125,22 @@ impl ButtonSize {
 
     pub fn line_height(self) -> f32 {
         match self {
+            ButtonSize::App => theme::LINE_META,
             ButtonSize::Xs => theme::LINE_TIGHT,
             _ => theme::LINE_LABEL,
         }
     }
 
     pub fn icon_size(self) -> f32 {
-        16.0
+        match self {
+            ButtonSize::App => 14.0,
+            _ => 16.0,
+        }
     }
 
     pub fn radius(self) -> u8 {
         match self {
+            ButtonSize::App => theme::radius::DEMO,
             ButtonSize::Xs => theme::radius::SM,
             ButtonSize::Lg => theme::radius::LG,
             _ => theme::radius::MD,
@@ -227,18 +238,30 @@ fn button_colors(p: &Palette, variant: ButtonVariant) -> ButtonColors {
         }
     };
     match variant {
-        ButtonVariant::Primary => tint(
-            p.primary,
-            [0.10, 0.16, 0.22, 0.12],
-            [41, 56, 77, 51],
-            p.primary_text,
-        ),
-        ButtonVariant::Destructive => tint(
-            p.red,
-            [0.07, 0.11, 0.16, 0.09],
-            [23, 36, 51, 36],
-            p.error_text,
-        ),
+        ButtonVariant::Primary => ButtonColors {
+            base: p.primary,
+            hover: p.primary_hover,
+            press: p.primary_active,
+            fg: p.on_primary,
+            fg_hover: p.on_primary,
+            border: Color32::TRANSPARENT,
+            border_hover: Color32::TRANSPARENT,
+            border_width: 0.0,
+            raised: false,
+            underline: false,
+        },
+        ButtonVariant::Destructive => ButtonColors {
+            base: p.error_soft,
+            hover: p.mix(p.error_soft, p.red, 0.16),
+            press: p.mix(p.error_soft, p.red, 0.30),
+            fg: p.error_text,
+            fg_hover: p.error_text,
+            border: p.error_border,
+            border_hover: p.red,
+            border_width: theme::BORDER,
+            raised: false,
+            underline: false,
+        },
         ButtonVariant::Info => tint(
             p.blue,
             [0.04, 0.07, 0.10, 0.08],
@@ -269,21 +292,21 @@ fn button_colors(p: &Palette, variant: ButtonVariant) -> ButtonColors {
             press: p.over(if p.dark { p.card } else { p.bg }, p.active),
             fg: p.fg,
             fg_hover: p.fg,
-            border: p.raised_edge(),
-            border_hover: p.raised_edge(),
+            border: p.border,
+            border_hover: p.border_hover,
             border_width: theme::HAIRLINE,
-            raised: true,
+            raised: false,
             underline: false,
         },
         ButtonVariant::Secondary => ButtonColors {
-            base: p.bg_soft,
-            hover: p.over(p.bg_soft, p.hover),
-            press: p.over(p.bg_soft, p.active),
+            base: if p.dark { p.card } else { p.bg },
+            hover: p.over(if p.dark { p.card } else { p.bg }, p.hover),
+            press: p.over(if p.dark { p.card } else { p.bg }, p.active),
             fg: p.fg,
             fg_hover: p.fg,
-            border: Color32::TRANSPARENT,
-            border_hover: Color32::TRANSPARENT,
-            border_width: 0.0,
+            border: p.border,
+            border_hover: p.border_hover,
+            border_width: theme::BORDER,
             raised: false,
             underline: false,
         },
@@ -314,7 +337,7 @@ fn button_colors(p: &Palette, variant: ButtonVariant) -> ButtonColors {
         ButtonVariant::Ghost => ButtonColors {
             base: Color32::TRANSPARENT,
             hover: p.hover,
-            press: p.hover,
+            press: p.active,
             fg: p.fg,
             fg_hover: p.fg,
             border: Color32::TRANSPARENT,
@@ -354,15 +377,6 @@ fn dim(color: Color32) -> Color32 {
     theme::scale_alpha(color, 0.5)
 }
 
-fn paint_button_shadow(ui: &Ui, rect: Rect, corner: u8, p: &Palette) {
-    let alpha = if p.dark { 70 } else { 22 };
-    ui.painter().rect_filled(
-        rect.translate(Vec2::new(0.0, 1.0)).expand(0.5),
-        CornerRadius::same(corner.saturating_add(1)),
-        Color32::from_black_alpha(alpha),
-    );
-}
-
 fn paint_raised(ui: &Ui, rect: Rect, corner: u8, p: &Palette, pressed: bool, raised_edge: bool) {
     if pressed {
         ui.painter().rect_stroke(
@@ -391,7 +405,14 @@ fn paint_raised(ui: &Ui, rect: Rect, corner: u8, p: &Palette, pressed: bool, rai
     }
 }
 
-pub fn focus_ring(_ui: &Ui, _rect: Rect, _corner: u8, _p: &Palette) {}
+pub fn focus_ring(ui: &Ui, rect: Rect, corner: u8, p: &Palette) {
+    ui.painter().rect_stroke(
+        rect.expand(1.0),
+        CornerRadius::same(corner.saturating_add(1)),
+        Stroke::new(2.0, p.focus_ring),
+        StrokeKind::Outside,
+    );
+}
 
 pub fn tooltip(response: Response, text: impl Into<egui::WidgetText>) -> Response {
     let text: egui::WidgetText = text.into();
@@ -447,12 +468,14 @@ pub fn button_ex(
 ) -> Response {
     let font = if size == ButtonSize::Xs {
         theme::font(size.font_size())
+    } else if variant == ButtonVariant::Primary {
+        theme::font_semibold(size.font_size())
     } else {
         theme::font_medium(size.font_size())
     };
-    let galley = ui
+    let measured = ui
         .painter()
-        .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+        .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
     let icon_only = variant == ButtonVariant::Icon && label.trim().is_empty() && icon.is_some();
     let icon_space = match (icon, icon_only) {
         (None, _) => 0.0,
@@ -464,11 +487,12 @@ pub fn button_ex(
     } else {
         size.padding()
     };
-    let width = if icon_only {
+    let desired = if icon_only {
         size.height()
     } else {
-        (galley.size().x + icon_space + pad * 2.0).max(size.height())
+        (measured.size().x + icon_space + pad * 2.0).max(size.height())
     };
+    let width = desired.min(ui.available_width().max(size.height()));
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, size.height()),
         if enabled {
@@ -477,6 +501,22 @@ pub fn button_ex(
             Sense::hover()
         },
     );
+    let text_room = (width - pad * 2.0 - icon_space).max(0.0);
+    let galley = if measured.size().x > text_room {
+        egui::WidgetText::from(
+            RichText::new(label)
+                .font(font)
+                .color(Color32::PLACEHOLDER),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            text_room,
+            egui::TextStyle::Button,
+        )
+    } else {
+        measured
+    };
     let enabled = enabled && ui.is_enabled();
     if enabled {
         crate::widgets::pointer(ui, &response);
@@ -527,9 +567,6 @@ pub fn button_ex(
         dim(colors.border)
     };
     let corner = size.radius();
-    if colors.raised {
-        paint_button_shadow(ui, rect, corner, p);
-    }
     if fill.a() > 0 {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(corner), fill);
@@ -550,6 +587,20 @@ pub fn button_ex(
             CornerRadius::same(corner),
             Stroke::new(colors.border_width, border),
             StrokeKind::Inside,
+        );
+    }
+    if focus_t > 0.01 {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(corner),
+            Stroke::new(theme::BORDER, p.fade(p.border_focus, focus_t)),
+            StrokeKind::Inside,
+        );
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            CornerRadius::same(corner.saturating_add(1)),
+            Stroke::new(2.0, p.fade(p.focus_ring, focus_t)),
+            StrokeKind::Outside,
         );
     }
     let mut x = if icon_only {
@@ -601,7 +652,7 @@ pub fn button_tip(
 }
 
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tint: Color32) -> Response {
-    let hit = (size + 8.0).max(HIT_XS);
+    let hit = (size + 8.0).max(theme::ICON_BUTTON);
     icon_button_hit(ui, icon, size, hit, tint)
 }
 
@@ -655,7 +706,7 @@ pub fn icon_button_hit(ui: &mut Ui, icon: Icon, size: f32, hit: f32, tint: Color
         let color = if press_t > hover_t { p.active } else { p.hover };
         ui.painter().rect_filled(
             rect,
-            CornerRadius::same(theme::radius::MD),
+            CornerRadius::same(theme::radius::SM),
             theme::scale_alpha(color, fill_t),
         );
     }
@@ -666,6 +717,14 @@ pub fn icon_button_hit(ui: &mut Ui, icon: Icon, size: f32, hit: f32, tint: Color
     };
     let inner = Rect::from_center_size(rect.center(), Vec2::splat(size));
     icons::paint(ui, icon, inner, fg);
+    if focus_t > 0.01 {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            Stroke::new(2.0, theme::scale_alpha(p.focus_ring, focus_t)),
+            StrokeKind::Outside,
+        );
+    }
     pointer(ui, &response);
     response
 }
@@ -675,7 +734,7 @@ pub fn subtle_icon_button(ui: &mut Ui, icon: Icon, size: f32, p: &Palette) -> Re
 }
 
 pub fn primary_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Primary, ButtonSize::Md, p)
+    button(ui, label, icon, ButtonVariant::Primary, ButtonSize::App, p)
 }
 
 pub fn destructive_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
@@ -684,21 +743,31 @@ pub fn destructive_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Pale
         label,
         icon,
         ButtonVariant::Destructive,
-        ButtonSize::Md,
+        ButtonSize::App,
         p,
     )
 }
 
 pub fn info_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Info, ButtonSize::Md, p)
+    button(ui, label, icon, ButtonVariant::Info, ButtonSize::App, p)
 }
 
 pub fn neutral_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Neutral, ButtonSize::Md, p)
+    button(ui, label, icon, ButtonVariant::Neutral, ButtonSize::App, p)
 }
 
 pub fn secondary_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Secondary, ButtonSize::Md, p)
+    button(ui, label, icon, ButtonVariant::Secondary, ButtonSize::App, p)
+}
+
+pub fn app_button(
+    ui: &mut Ui,
+    label: &str,
+    icon: Option<Icon>,
+    variant: ButtonVariant,
+    p: &Palette,
+) -> Response {
+    button(ui, label, icon, variant, ButtonSize::App, p)
 }
 
 pub fn chip_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
@@ -1007,7 +1076,7 @@ pub fn tabs_strip_at(
             rect.top() + theme::HAIRLINE,
             Stroke::new(
                 theme::HAIRLINE,
-                Color32::from_black_alpha(if p.dark { 100 } else { 12 }),
+                p.fade(p.shadow, if p.dark { 0.22 } else { 0.35 }),
             ),
         );
     }
@@ -1188,29 +1257,14 @@ pub fn tabs_strip_at(
 }
 
 fn paint_pill_indicator(ui: &Ui, rect: Rect, p: &Palette) {
-    ui.painter().rect_filled(
-        rect.translate(Vec2::new(0.0, 1.0)).expand(0.5),
-        CornerRadius::same(theme::radius::MD + 1),
-        Color32::from_black_alpha(if p.dark { 80 } else { 18 }),
-    );
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(theme::radius::MD),
-        if p.dark { p.card } else { p.bg },
-    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::SM), p.card);
     ui.painter().rect_stroke(
-        rect.shrink(0.25),
-        CornerRadius::same(theme::radius::MD),
-        Stroke::new(theme::HAIRLINE, p.raised_edge()),
+        rect,
+        CornerRadius::same(theme::radius::SM),
+        Stroke::new(theme::BORDER, p.border),
         StrokeKind::Inside,
     );
-    if let Some(highlight) = p.raised_highlight() {
-        ui.painter().hline(
-            rect.left() + theme::radius::MD as f32..=rect.right() - theme::radius::MD as f32,
-            rect.top() + theme::HAIRLINE,
-            Stroke::new(theme::HAIRLINE, highlight),
-        );
-    }
 }
 
 pub fn segmented(ui: &mut Ui, labels: &[&str], selected: &mut usize, p: &Palette) -> bool {
@@ -1284,7 +1338,7 @@ fn segmented_impl(
         rect.top() + theme::HAIRLINE,
         Stroke::new(
             theme::HAIRLINE,
-            Color32::from_black_alpha(if p.dark { 100 } else { 12 }),
+            p.fade(p.shadow, if p.dark { 0.22 } else { 0.35 }),
         ),
     );
     let mut x = rect.left() + TAB_TRACK_PAD;
@@ -1881,17 +1935,20 @@ pub fn refresh_action(ui: &mut Ui, spinning: bool, size: f32, p: &Palette) -> Re
 }
 
 pub fn kbd(ui: &mut Ui, keys: &str, p: &Palette) {
-    let font = theme::font_medium(11.0);
+    let font = theme::font_mono(theme::TEXT_TAG);
     let galley = ui
         .painter()
         .layout_no_wrap(keys.to_string(), font, p.fg_muted);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(galley.size().x + 10.0, 20.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x + 12.0, theme::KEYCAP_HEIGHT),
+        Sense::hover(),
+    );
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.hover);
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(theme::radius::XS),
-        Stroke::new(theme::HAIRLINE, p.edge_muted()),
+        Stroke::new(theme::BORDER, p.border),
         StrokeKind::Inside,
     );
     ui.painter().galley(
@@ -1909,6 +1966,44 @@ pub fn section_label(ui: &mut Ui, text: &str, p: &Palette) {
         RichText::new(text)
             .font(theme::font_medium(theme::TEXT_META))
             .color(p.fg_muted),
+    );
+}
+
+pub fn tag_chip(ui: &mut Ui, label: &str, p: &Palette) -> Response {
+    let font = theme::font_mono(theme::TEXT_TAG);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, p.fg_muted);
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
+    ui.painter().galley(
+        Pos2::new(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        p.fg_muted,
+    );
+    response
+}
+
+pub fn section_eyebrow(ui: &mut Ui, text: &str, p: &Palette) {
+    let font = theme::font_mono(theme::TEXT_TAG);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_uppercase(), font, Color32::PLACEHOLDER);
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x, galley.size().y.max(theme::LINE_TAG)),
+        Sense::hover(),
+    );
+    ui.painter().galley(
+        Pos2::new(rect.left(), rect.center().y - galley.size().y * 0.5),
+        galley,
+        p.fg_muted,
     );
 }
 
@@ -2068,17 +2163,22 @@ pub fn search_field(ui: &mut Ui, query: &mut String, hint: &str, p: &Palette, id
         .id(id)
         .frame(egui::Frame::NONE)
         .margin(Margin::ZERO)
-        .hint_text(
-            RichText::new(hint)
-                .font(theme::font(theme::TEXT_UI_LABEL))
-                .color(p.fg_muted),
-        )
+        .align(egui::Align2::LEFT_CENTER)
         .text_color(p.fg)
         .font(theme::font(theme::TEXT_UI_LABEL))
         .desired_width(f32::INFINITY);
     let edit_response = child.add(edit);
     if response.clicked() {
         edit_response.request_focus();
+    }
+    if query.is_empty() && !focused {
+        ui.painter().text(
+            Pos2::new(rect.left() + 37.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            hint,
+            theme::font(theme::TEXT_UI_LABEL),
+            p.fg_muted,
+        );
     }
     if !query.is_empty() && response.hovered() {
         let clear = Rect::from_center_size(
@@ -2601,6 +2701,7 @@ mod tests {
         let p = Palette::light();
         egui::__run_test_ui(|ui| {
             for (size, height) in [
+                (ButtonSize::App, 26.0),
                 (ButtonSize::Xs, 24.0),
                 (ButtonSize::Sm, 28.0),
                 (ButtonSize::Md, 32.0),
@@ -2616,6 +2717,32 @@ mod tests {
                 );
                 assert!((response.rect.height() - height).abs() < 0.01);
             }
+        });
+    }
+
+    #[test]
+    fn app_button_family_stands_at_twenty_six_pixels() {
+        let p = Palette::light();
+        egui::__run_test_ui(|ui| {
+            ui.set_width(600.0);
+            for response in [
+                primary_button(ui, "Allow once", None, &p),
+                secondary_button(ui, "Allow in this session", None, &p),
+                destructive_button(ui, "Deny", None, &p),
+            ] {
+                assert!((response.rect.height() - theme::BUTTON_HEIGHT).abs() < 0.01);
+            }
+        });
+    }
+
+    #[test]
+    fn tag_primitives_use_the_mono_micro_metrics() {
+        let p = Palette::light();
+        egui::__run_test_ui(|ui| {
+            let tag = tag_chip(ui, "main", &p);
+            assert!((tag.rect.height() - theme::TAG_HEIGHT).abs() < 0.01);
+            kbd(ui, "⌘K", &p);
+            section_eyebrow(ui, "In progress (2)", &p);
         });
     }
 

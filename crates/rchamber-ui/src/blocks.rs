@@ -557,36 +557,110 @@ impl<'a> BlockRenderer<'a> {
 
     fn code(&mut self, ui: &mut Ui, code: &str, language: Option<&str>) {
         let p = self.p;
+        let language = language.unwrap_or("").trim();
+        let runnable = matches!(
+            language,
+            "bash" | "sh" | "zsh" | "shell" | "console" | "cmd" | "fish" | "powershell"
+        );
+        let diffable = language == "diff" || looks_like_diff(code);
+        let id = ui.next_auto_id();
+        let run_id = egui::Id::unique(("block-run", code));
+        let default_diff = language == "diff";
+        let mut show_diff = ui
+            .memory(|memory| memory.data.get_temp::<bool>(id.with("diff")))
+            .unwrap_or(default_diff);
+        let width = ui.available_width();
         egui::Frame::new()
             .fill(p.code_bg)
-            .stroke(Stroke::new(theme::HAIRLINE, p.edge_muted()))
-            .corner_radius(CornerRadius::same(theme::radius::MD))
-            .inner_margin(Margin::same(10))
+            .stroke(Stroke::new(theme::BORDER, p.border))
+            .corner_radius(CornerRadius::same(theme::radius::TABLE))
             .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                if let Some(language) = language.filter(|value| !value.trim().is_empty()) {
-                    ui.label(
-                        RichText::new(language)
-                            .font(theme::font_mono(self.base * 0.72))
-                            .color(p.fg_faint),
-                    );
-                    ui.add_space(4.0);
-                }
-                egui::ScrollArea::horizontal()
-                    .id_salt(ui.next_auto_id())
-                    .auto_shrink([false, true])
+                ui.set_width(width.max(40.0));
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                let inner = ui.available_width();
+                let (header, _) = ui.allocate_exact_size(Vec2::new(inner, 30.0), Sense::hover());
+                ui.painter().rect_filled(
+                    header,
+                    CornerRadius {
+                        nw: theme::radius::TABLE,
+                        ne: theme::radius::TABLE,
+                        sw: 0,
+                        se: 0,
+                    },
+                    p.bg_soft,
+                );
+                ui.painter().hline(
+                    header.x_range(),
+                    header.bottom(),
+                    Stroke::new(theme::HAIRLINE, p.border),
+                );
+                let mut header_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(header.shrink2(Vec2::new(10.0, 0.0)))
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                header_ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+                let title = if language.is_empty() {
+                    "code"
+                } else {
+                    language
+                };
+                header_ui.label(
+                    RichText::new(title)
+                        .font(theme::font_mono(theme::TEXT_CODE_HEADER))
+                        .color(p.fg_muted),
+                );
+                header_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+                    if runnable && code_action_button(ui, "Run", true, p).clicked() {
+                        crate::shell_run::run(ui.ctx(), run_id, code);
+                    }
+                    if diffable {
+                        let label = if show_diff { "Code" } else { "View diff" };
+                        if code_action_button(ui, label, false, p).clicked() {
+                            show_diff = !show_diff;
+                        }
+                    }
+                    if code_action_button(ui, "Copy", false, p).clicked() {
+                        ui.ctx().copy_text(code.to_string());
+                    }
+                });
+                ui.memory_mut(|memory| {
+                    memory.data.insert_temp(id.with("diff"), show_diff);
+                });
+                egui::Frame::new()
+                    .inner_margin(Margin {
+                        left: 12,
+                        right: 12,
+                        top: 10,
+                        bottom: 10,
+                    })
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(code)
-                                    .font(theme::font_mono(self.base * 0.88))
-                                    .color(p.fg),
-                            )
-                            .selectable(true)
-                            .extend(),
-                        );
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::horizontal()
+                            .id_salt(id.with("body"))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                if show_diff {
+                                    code_diff(ui, p, code);
+                                } else {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(code)
+                                                .font(theme::font_mono(theme::TEXT_CODE))
+                                                .color(p.fg)
+                                                .line_height(Some(theme::LINE_CODE_ROW)),
+                                        )
+                                        .selectable(true)
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                    );
+                                }
+                            });
                     });
             });
+        if runnable {
+            crate::shell_run::show(ui, run_id, p);
+        }
     }
 
     fn badge(&mut self, ui: &mut Ui, label: &str, tone: Tone) {
@@ -622,8 +696,8 @@ impl<'a> BlockRenderer<'a> {
         let colors = tone_colors(p, tone);
         let inner = egui::Frame::new()
             .fill(colors.fill)
-            .stroke(Stroke::new(theme::HAIRLINE, colors.border))
-            .corner_radius(CornerRadius::same(theme::radius::MD))
+            .stroke(Stroke::new(theme::BORDER, colors.border))
+            .corner_radius(CornerRadius::same(theme::radius::PANEL))
             .inner_margin(Margin {
                 left: 14,
                 right: 10,
@@ -654,7 +728,7 @@ impl<'a> BlockRenderer<'a> {
             });
         let bar = Rect::from_min_size(
             inner.response.rect.min,
-            Vec2::new(2.5, inner.response.rect.height()),
+            Vec2::new(3.0, inner.response.rect.height()),
         );
         ui.painter()
             .rect_filled(bar, CornerRadius::same(1), colors.accent);
@@ -2283,6 +2357,106 @@ fn paint_check(ui: &Ui, rect: Rect, color: Color32) {
         .line_segment([start, middle], Stroke::new(1.6, color));
     ui.painter()
         .line_segment([middle, end], Stroke::new(1.6, color));
+}
+
+fn code_action_button(ui: &mut Ui, label: &str, primary: bool, p: &Palette) -> egui::Response {
+    let font = theme::font(theme::TEXT_TAG);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x + 16.0, 22.0),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &response);
+    let (fill, border, ink) = if primary {
+        (
+            if response.hovered() {
+                p.primary_hover
+            } else {
+                p.primary
+            },
+            Color32::TRANSPARENT,
+            p.on_primary,
+        )
+    } else {
+        (
+            if response.hovered() { p.hover } else { p.card },
+            p.border,
+            if response.hovered() { p.fg } else { p.fg_muted },
+        )
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::SM), fill);
+    if border != Color32::TRANSPARENT {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            Stroke::new(theme::BORDER, border),
+            StrokeKind::Inside,
+        );
+    }
+    ui.painter().galley(
+        Pos2::new(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        ink,
+    );
+    response
+}
+
+fn looks_like_diff(code: &str) -> bool {
+    let mut hunk = false;
+    let mut header = false;
+    for line in code.lines() {
+        if line.starts_with("@@") {
+            hunk = true;
+        }
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            header = true;
+        }
+        if hunk && header {
+            return true;
+        }
+    }
+    false
+}
+
+fn code_diff(ui: &mut Ui, p: &Palette, code: &str) {
+    let font = theme::font_mono(theme::TEXT_CODE);
+    for line in code.lines() {
+        let (color, fill) = if line.starts_with("+++") || line.starts_with("---") {
+            (p.fg_faint, None)
+        } else if line.starts_with('+') {
+            (p.diff_added, Some(p.diff_added_bg))
+        } else if line.starts_with('-') {
+            (p.diff_removed, Some(p.diff_removed_bg))
+        } else if line.starts_with("@@") {
+            (p.fg_muted, None)
+        } else {
+            (p.fg_muted, None)
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap(line.to_string(), font.clone(), color);
+        let (rect, _) = ui.allocate_exact_size(
+            Vec2::new(
+                ui.available_width().max(galley.size().x + 8.0),
+                theme::LINE_CODE_ROW,
+            ),
+            Sense::hover(),
+        );
+        if let Some(fill) = fill {
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
+        }
+        ui.painter().galley(
+            Pos2::new(rect.left() + 2.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            color,
+        );
+    }
 }
 
 fn tone_colors(p: &Palette, tone: Tone) -> ToneColors {

@@ -1,5 +1,6 @@
 use eframe::egui::{
-    self, Color32, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText,
+    self, Color32, CornerRadius, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2,
+    WidgetText,
 };
 use rchamber_api::models::Message;
 use rchamber_app::format::money;
@@ -12,17 +13,22 @@ use crate::surfaces::{PanelZone, Surface};
 use crate::theme::{self, Palette};
 use crate::widgets;
 
-pub const HEADER_HEIGHT: f32 = 48.0;
+pub const HEADER_HEIGHT: f32 = 40.0;
 
-const BLOCK_PAD: f32 = 4.0;
-const TITLE_SIZE: f32 = 14.0;
-const MENU_W: f32 = 24.0;
+const TITLE_SIZE: f32 = 13.5;
+const MENU_W: f32 = 20.0;
 const MENU_H: f32 = 18.0;
-const MENU_GAP: f32 = 2.0;
-const CLUSTER_GAP: f32 = 8.0;
+const MENU_GAP: f32 = 5.0;
+const CHIP_GAP: f32 = 6.0;
 const BUTTON: f32 = 24.0;
 const RING: f32 = 16.0;
 const ACTION_GAP: f32 = 12.0;
+const TAB_HEIGHT: f32 = 26.0;
+const TAB_PAD: f32 = 9.0;
+const TAB_GAP: f32 = 4.0;
+const TAB_FONT: f32 = 12.5;
+const DOT: f32 = 5.0;
+const TITLE_ROOM_MIN: f32 = 96.0;
 
 struct Reading {
     fraction: Option<f32>,
@@ -31,85 +37,254 @@ struct Reading {
     cost: f64,
 }
 
+struct TabSpec {
+    label: &'static str,
+    surface: Surface,
+    count: usize,
+}
+
 pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let p = app.palette.clone();
     let leading = chrome::header_leading(ui, app.ui.sidebar_exposure);
     let row = ui.max_rect();
+    ui.painter().hline(
+        row.x_range(),
+        row.bottom() - theme::BORDER * 0.5,
+        Stroke::new(theme::BORDER, p.border),
+    );
 
     let reading = reading(app);
-    let cluster = cluster_width(ui, &p, reading.as_ref());
-    let left = row.left() + leading + BLOCK_PAD;
-    let right = (row.right() - cluster - ACTION_GAP).max(left + 48.0);
-    crate::chrome::header_drag(ui, right);
-
     let session = app.model.active.as_ref().map(|chat| {
-        let project = app
-            .model
-            .project_for_session(&chat.session)
-            .map(|project| project.display_name().to_string())
-            .or_else(|| {
-                chat.session.directory().and_then(|directory| {
-                    std::path::Path::new(directory)
-                        .file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                })
-            });
-        (chat.session.id.clone(), chat.title().to_string(), project)
+        (
+            chat.session.id.clone(),
+            chat.title().to_string(),
+            chat.awaiting_permission,
+        )
     });
+    let left = row.left() + leading;
+    let approval = session.as_ref().is_some_and(|(_, _, pending)| *pending);
+
+    let mut cluster_left = row.right();
+    let mut tabs: Vec<(Rect, TabSpec, bool)> = Vec::new();
+    if session.is_some() {
+        let specs = [
+            TabSpec {
+                label: "Chat",
+                surface: Surface::Session,
+                count: 0,
+            },
+            TabSpec {
+                label: "Changes",
+                surface: Surface::Changes,
+                count: app
+                    .model
+                    .active
+                    .as_ref()
+                    .map(|chat| chat.diff.len())
+                    .unwrap_or(0),
+            },
+            TabSpec {
+                label: "Terminal",
+                surface: Surface::Terminal,
+                count: 0,
+            },
+        ];
+        let widths: Vec<f32> = specs
+            .iter()
+            .map(|spec| tab_width(ui, spec, app.ui.surface == spec.surface))
+            .collect();
+        let total: f32 = widths.iter().sum::<f32>() + TAB_GAP * (specs.len() - 1) as f32;
+        let mut x = row.right() - total;
+        for (spec, width) in specs.into_iter().zip(widths) {
+            let rect = Rect::from_min_size(
+                Pos2::new(x, row.center().y - TAB_HEIGHT * 0.5),
+                Vec2::new(width, TAB_HEIGHT),
+            );
+            tabs.push((rect, spec, app.ui.context_open));
+            x += width + TAB_GAP;
+        }
+        cluster_left = row.right() - total;
+    } else if row.width() > 760.0 {
+        let chips = [
+            (
+                format!("{} Command palette", widgets::shortcut_label("K")),
+                true,
+            ),
+            (
+                format!("{} Open project", widgets::shortcut_label("O")),
+                false,
+            ),
+        ];
+        let mut x = row.right();
+        for (label, palette) in chips.iter().rev() {
+            let width = tag_width(ui, label);
+            let rect = Rect::from_min_size(
+                Pos2::new(x - width, row.center().y - theme::TAG_HEIGHT * 0.5),
+                Vec2::new(width, theme::TAG_HEIGHT),
+            );
+            paint_tag(ui, rect, label, p.fg_muted, p.tag_bg);
+            let hit = ui.interact(
+                rect,
+                egui::Id::unique(("header-home-chip", label.as_str())),
+                Sense::click(),
+            );
+            widgets::pointer(ui, &hit);
+            if hit.clicked() {
+                if *palette {
+                    app.ui.palette_open = true;
+                } else {
+                    app.open_add_project();
+                }
+            }
+            x = rect.left() - CHIP_GAP;
+        }
+        cluster_left = x + CHIP_GAP;
+    }
+
+    let usage_room = reading
+        .as_ref()
+        .map(|value| usage_width(ui, &p, value) + ACTION_GAP)
+        .unwrap_or(0.0);
+    let project_button = app
+        .model
+        .workspace
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || app
+            .model
+            .active
+            .as_ref()
+            .and_then(|chat| chat.session.directory())
+            .is_some();
+    let extras = usage_room
+        + if project_button { BUTTON } else { 0.0 }
+        + ACTION_GAP;
+    let show_extras = cluster_left - extras > left + TITLE_ROOM_MIN;
+    if show_extras {
+        let mut cursor = cluster_left;
+        if project_button {
+            let project_rect = Rect::from_center_size(
+                Pos2::new(cursor - BUTTON * 0.5, row.center().y),
+                Vec2::splat(BUTTON),
+            );
+            cursor -= BUTTON + ACTION_GAP;
+            let project = ui.interact(
+                project_rect,
+                egui::Id::unique("header-project-controls"),
+                Sense::click(),
+            );
+            widgets::pointer(ui, &project);
+            paint_icon(ui, &p, Icon::ArrowUpRight, project_rect, false, &project);
+            if project.on_hover_text("Reveal project folder").clicked() {
+                let directory = app.workspace_directory();
+                open_directory(&directory);
+            }
+        }
+        if let Some(reading) = reading.as_ref() {
+            let width = usage_width(ui, &p, reading);
+            let rect = Rect::from_min_max(
+                Pos2::new(cursor - width, row.center().y - RING * 0.5),
+                Pos2::new(cursor, row.center().y + RING * 0.5),
+            );
+            usage(ui, app, &p, rect, reading);
+            cursor -= width + ACTION_GAP;
+        }
+        cluster_left = cursor;
+    }
+
     let title = session
         .as_ref()
         .map(|(_, title, _)| title.as_str())
-        .unwrap_or("New session");
-    let menu_open = app.ui.header_menu;
-
-    let menu_room = if session.is_some() {
-        MENU_W + MENU_GAP
+        .unwrap_or("Welcome to RustChamber");
+    let mut chip_room = 0.0;
+    if let Some((id, _, _)) = session.as_ref() {
+        chip_room += CHIP_GAP + tag_width(ui, &format!("Session #{}", short_id(id)));
+        if approval {
+            chip_room += CHIP_GAP + tag_width(ui, "Awaiting tool approval");
+        }
+        chip_room += MENU_GAP + MENU_W + CHIP_GAP;
     } else {
-        0.0
-    };
-    let title_room = (right - left - menu_room).max(40.0);
-    let subtitle = session
-        .as_ref()
-        .and_then(|(_, _, project)| project.as_deref());
-    let title_center = if subtitle.is_some() {
-        row.center().y - 7.0
-    } else {
-        row.center().y
-    };
-    let title_galley = elide(ui, title, theme::font(TITLE_SIZE), p.fg, title_room);
+        chip_room += CHIP_GAP + tag_width(ui, "Local-first workspace");
+    }
+    let room =
+        (cluster_left - left - ACTION_GAP * 1.5 - chip_room).max(40.0).min(520.0);
+    let title_galley = elide(ui, title, theme::font_semibold(TITLE_SIZE), p.fg, room);
     let title_end = left + title_galley.size().x;
+
+    let mut x = title_end;
+    let mut chips: Vec<(Rect, String, bool)> = Vec::new();
+    if session.is_some() {
+        let label = format!("Session #{}", short_id(&session.as_ref().unwrap().0));
+        let width = tag_width(ui, &label);
+        let rect = Rect::from_min_size(
+            Pos2::new(x + CHIP_GAP, row.center().y - theme::TAG_HEIGHT * 0.5),
+            Vec2::new(width, theme::TAG_HEIGHT),
+        );
+        x = rect.right();
+        chips.push((rect, label, false));
+        if approval {
+            let label = "Awaiting tool approval".to_string();
+            let width = tag_width(ui, &label);
+            let rect = Rect::from_min_size(
+                Pos2::new(x + CHIP_GAP, row.center().y - theme::TAG_HEIGHT * 0.5),
+                Vec2::new(width, theme::TAG_HEIGHT),
+            );
+            x = rect.right();
+            chips.push((rect, label, true));
+        }
+    } else {
+        let label = "Local-first workspace".to_string();
+        let width = tag_width(ui, &label);
+        let rect = Rect::from_min_size(
+            Pos2::new(x + CHIP_GAP, row.center().y - theme::TAG_HEIGHT * 0.5),
+            Vec2::new(width, theme::TAG_HEIGHT),
+        );
+        x = rect.right();
+        chips.push((rect, label, false));
+    }
+
+    let menu_rect = Rect::from_center_size(
+        Pos2::new(x + MENU_GAP + MENU_W * 0.5, row.center().y),
+        Vec2::new(MENU_W, MENU_H),
+    );
+    let title_block = Rect::from_min_max(
+        Pos2::new(left - 2.0, row.top()),
+        Pos2::new(
+            if session.is_some() {
+                menu_rect.right()
+            } else {
+                x
+            },
+            row.bottom(),
+        ),
+    );
+    chrome::header_drag(ui, cluster_left - 4.0, title_block);
     ui.painter().galley(
-        Pos2::new(left, title_center - title_galley.size().y * 0.5),
+        Pos2::new(left, row.center().y - title_galley.size().y * 0.5),
         title_galley,
         p.fg,
     );
-    if let Some(project) = subtitle {
-        let subtitle_galley = elide(
-            ui,
-            project,
-            theme::font(theme::TEXT_MICRO),
-            p.fg_muted,
-            title_room,
-        );
-        ui.painter().galley(
-            Pos2::new(left, row.center().y + 9.0 - subtitle_galley.size().y * 0.5),
-            subtitle_galley,
-            p.fg_muted,
-        );
+    for (rect, label, warning) in &chips {
+        if rect.right() > cluster_left - 4.0 {
+            continue;
+        }
+        if *warning {
+            paint_tag(ui, *rect, label, p.warning_text, p.warning_soft);
+        } else {
+            paint_tag(ui, *rect, label, p.fg_muted, p.tag_bg);
+        }
     }
 
-    if let Some((id, title, _)) = session.as_ref() {
-        let rect = Rect::from_center_size(
-            Pos2::new(title_end + MENU_GAP + MENU_W * 0.5, title_center),
-            Vec2::new(MENU_W, MENU_H),
-        );
+    if let Some((id, title, _)) = session.as_ref()
+        && menu_rect.right() <= cluster_left - 4.0
+    {
         let trigger = ui.interact(
-            rect,
+            menu_rect,
             egui::Id::unique(("header-session-menu", id)),
             Sense::click(),
         );
-        crate::widgets::pointer(ui, &trigger);
-        paint_menu_trigger(ui, &p, rect, id, trigger.hovered(), menu_open);
+        widgets::pointer(ui, &trigger);
+        paint_menu_trigger(ui, &p, menu_rect, id, trigger.hovered(), app.ui.header_menu);
         session_menu(
             ui,
             app,
@@ -117,13 +292,152 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
             MenuTarget {
                 id,
                 title,
-                open: menu_open,
+                open: app.ui.header_menu,
             },
             trigger,
         );
     }
 
-    paint_actions(ui, app, &p, row, reading.as_ref());
+    for (rect, spec, opened) in tabs {
+        let active = opened && app.ui.surface == spec.surface;
+        let response = paint_tab(ui, &p, rect, &spec, active);
+        if response
+            .on_hover_text(match spec.surface {
+                Surface::Session => "Conversation".to_string(),
+                Surface::Changes => "Review working changes".to_string(),
+                _ => "Built-in terminal".to_string(),
+            })
+            .clicked()
+        {
+            if select_surface(&mut app.ui, spec.surface)
+                && spec.surface == Surface::Changes
+                && let Some(id) = app.model.active_id().map(str::to_string)
+            {
+                app.backend.send(Action::LoadDiff(id));
+            }
+        }
+    }
+}
+
+fn short_id(id: &str) -> String {
+    let trimmed = id.trim_start_matches("ses_");
+    trimmed.chars().take(4).collect()
+}
+
+fn tab_width(ui: &Ui, spec: &TabSpec, active: bool) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        spec.label.to_string(),
+        theme::font_medium(TAB_FONT),
+        Color32::PLACEHOLDER,
+    );
+    let dot = if active { DOT + 5.0 } else { 0.0 };
+    let count = if spec.count > 0 {
+        let galley = ui.painter().layout_no_wrap(
+            spec.count.to_string(),
+            theme::font_mono(theme::TEXT_TAG),
+            Color32::PLACEHOLDER,
+        );
+        galley.size().x + 10.0 + 6.0
+    } else {
+        0.0
+    };
+    TAB_PAD * 2.0 + dot + galley.size().x + count
+}
+
+fn paint_tab(ui: &mut Ui, p: &Palette, rect: Rect, spec: &TabSpec, active: bool) -> Response {
+    let response = ui.interact(
+        rect,
+        egui::Id::unique(("header-tab", spec.label)),
+        Sense::click(),
+    );
+    widgets::pointer(ui, &response);
+    let hovered = hover_amount(ui.ctx(), response.id.with("hover"), response.hovered());
+    let corner = CornerRadius::same(theme::radius::SM);
+    if active {
+        ui.painter().rect_filled(rect, corner, p.card);
+        ui.painter().rect_stroke(
+            rect,
+            corner,
+            Stroke::new(theme::BORDER, p.border),
+            egui::StrokeKind::Inside,
+        );
+    } else if hovered > 0.01 {
+        ui.painter()
+            .rect_filled(rect, corner, p.fade(p.hover, hovered));
+    }
+    let color = if active {
+        p.fg
+    } else {
+        p.fg_muted.lerp_to_gamma(p.fg, hovered)
+    };
+    let mut x = rect.left() + TAB_PAD;
+    if active {
+        ui.painter().circle_filled(
+            Pos2::new(x + DOT * 0.5, rect.center().y),
+            DOT * 0.5,
+            p.primary,
+        );
+        x += DOT + 5.0;
+    }
+    let galley = ui.painter().layout_no_wrap(
+        spec.label.to_string(),
+        theme::font_medium(TAB_FONT),
+        color,
+    );
+    ui.painter().galley(
+        Pos2::new(x, rect.center().y - galley.size().y * 0.5),
+        galley.clone(),
+        color,
+    );
+    x += galley.size().x;
+    if spec.count > 0 {
+        let count = spec.count.to_string();
+        let galley = ui
+            .painter()
+            .layout_no_wrap(count.clone(), theme::font_mono(theme::TEXT_TAG), p.fg_muted);
+        let chip = Rect::from_min_size(
+            Pos2::new(x + 6.0, rect.center().y - theme::TAG_HEIGHT * 0.5),
+            Vec2::new(galley.size().x + 10.0, theme::TAG_HEIGHT),
+        );
+        ui.painter()
+            .rect_filled(chip, CornerRadius::same(theme::radius::XS), p.tag_bg);
+        ui.painter().galley(
+            Pos2::new(
+                chip.center().x - galley.size().x * 0.5,
+                chip.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            p.fg_muted,
+        );
+    }
+    response
+}
+
+fn tag_width(ui: &Ui, label: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(theme::TEXT_TAG),
+        Color32::PLACEHOLDER,
+    );
+    galley.size().x + 12.0
+}
+
+fn paint_tag(ui: &Ui, rect: Rect, label: &str, fg: Color32, bg: Color32) {
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(theme::TEXT_TAG),
+        fg,
+    );
+    ui.painter().galley(
+        Pos2::new(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        fg,
+    );
 }
 
 struct MenuTarget<'a> {
@@ -191,79 +505,14 @@ fn usage_width(ui: &Ui, p: &Palette, reading: &Reading) -> f32 {
     4.0 + RING + 6.0 + galley.size().x + 4.0
 }
 
-fn cluster_width(ui: &Ui, p: &Palette, reading: Option<&Reading>) -> f32 {
-    let mut width = BUTTON + CLUSTER_GAP + BUTTON;
-    if let Some(reading) = reading {
-        width += CLUSTER_GAP + usage_width(ui, p, reading);
+fn select_surface(ui: &mut crate::app::UiState, surface: Surface) -> bool {
+    if !ui.context_open {
+        ui.zone = PanelZone::Right;
     }
-    width
-}
-
-fn paint_actions(
-    ui: &mut Ui,
-    app: &mut RustChamber,
-    p: &Palette,
-    row: Rect,
-    reading: Option<&Reading>,
-) {
-    let center_y = row.center().y;
-    let mut right = row.right();
-
-    let toggle_rect = Rect::from_center_size(
-        Pos2::new(right - BUTTON * 0.5, center_y),
-        Vec2::splat(BUTTON),
-    );
-    right -= BUTTON + CLUSTER_GAP;
-    let toggle = ui.interact(
-        toggle_rect,
-        egui::Id::unique("header-work-status"),
-        Sense::click(),
-    );
-    crate::widgets::pointer(ui, &toggle);
-    paint_icon(
-        ui,
-        p,
-        Icon::Layers,
-        toggle_rect,
-        app.ui.context_open && app.ui.surface == Surface::Session,
-        &toggle,
-    );
-    if toggle.on_hover_text("Session").clicked() {
-        open_session_panel(&mut app.ui);
-    }
-
-    let project_rect = Rect::from_center_size(
-        Pos2::new(right - BUTTON * 0.5, center_y),
-        Vec2::splat(BUTTON),
-    );
-    right -= BUTTON + CLUSTER_GAP;
-    let project = ui.interact(
-        project_rect,
-        egui::Id::unique("header-project-controls"),
-        Sense::click(),
-    );
-    crate::widgets::pointer(ui, &project);
-    paint_icon(ui, p, Icon::ArrowUpRight, project_rect, false, &project);
-    if project.on_hover_text("Reveal project folder").clicked() {
-        let directory = app.workspace_directory();
-        open_directory(&directory);
-    }
-
-    if let Some(reading) = reading {
-        let width = usage_width(ui, p, reading);
-        let rect = Rect::from_min_max(
-            Pos2::new(right - width, center_y - BUTTON * 0.5),
-            Pos2::new(right, center_y + BUTTON * 0.5),
-        );
-        usage(ui, app, p, rect, reading);
-    }
-}
-
-fn open_session_panel(ui: &mut crate::app::UiState) {
-    let open = ui.context_open && ui.surface == Surface::Session && ui.zone == PanelZone::Right;
-    ui.surface = Surface::Session;
-    ui.zone = PanelZone::Right;
-    ui.context_open = !open;
+    let changed = ui.surface != surface;
+    ui.surface = surface;
+    ui.context_open = true;
+    changed
 }
 
 fn open_directory(directory: &str) {
@@ -276,7 +525,7 @@ fn usage(ui: &mut Ui, app: &mut RustChamber, p: &Palette, rect: Rect, reading: &
         egui::Id::unique("header-context-usage"),
         Sense::click(),
     );
-    crate::widgets::pointer(ui, &response);
+    widgets::pointer(ui, &response);
     let hovered = hover_amount(ui.ctx(), response.id, response.hovered());
     let open = app.ui.context_open
         && app.ui.surface == Surface::Context
@@ -289,7 +538,7 @@ fn usage(ui: &mut Ui, app: &mut RustChamber, p: &Palette, rect: Rect, reading: &
     let center = Pos2::new(rect.left() + 4.0 + RING * 0.5, rect.center().y);
     let radius = (RING - 2.0) * 0.5;
     ui.painter()
-        .circle_stroke(center, radius, Stroke::new(1.8, p.alpha(color, 77)));
+        .circle_stroke(center, radius, Stroke::new(1.6, p.alpha(color, 77)));
     if let Some(fraction) = reading.fraction {
         let start = -std::f32::consts::FRAC_PI_2;
         let sweep = std::f32::consts::TAU * fraction.clamp(0.0, 1.0);
@@ -306,7 +555,7 @@ fn usage(ui: &mut Ui, app: &mut RustChamber, p: &Palette, rect: Rect, reading: &
         if points.len() > 1 {
             ui.painter().add(egui::Shape::line(
                 points,
-                Stroke::new(1.8, tone(p, Some((fraction * 100.0).round()))),
+                Stroke::new(1.6, tone(p, Some((fraction * 100.0).round()))),
             ));
         }
     }
@@ -386,6 +635,13 @@ fn paint_menu_trigger(ui: &mut Ui, p: &Palette, rect: Rect, id: &str, hovered: b
         egui::Id::unique(("header-menu-hover", id)),
         hovered,
     );
+    if hovered {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            p.fade(p.hover, amount),
+        );
+    }
     let color = if open {
         p.fg
     } else {
@@ -394,7 +650,7 @@ fn paint_menu_trigger(ui: &mut Ui, p: &Palette, rect: Rect, id: &str, hovered: b
     icons::paint(
         ui,
         Icon::More,
-        Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
+        Rect::from_center_size(rect.center(), Vec2::splat(14.0)),
         color,
     );
 }
@@ -522,44 +778,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn header_session_action_opens_the_session_panel_on_the_right() {
+    fn stage_tab_opens_the_panel_on_the_right() {
         let mut ui = crate::app::UiState {
-            surface: Surface::Files,
-            zone: PanelZone::Bottom,
             context_open: false,
-            ..crate::app::UiState::default()
-        };
-        open_session_panel(&mut ui);
-        assert!(ui.context_open);
-        assert_eq!(ui.surface, Surface::Session);
-        assert_eq!(ui.zone, PanelZone::Right);
-    }
-
-    #[test]
-    fn header_session_action_switches_an_open_panel_to_the_session_surface() {
-        let mut ui = crate::app::UiState {
-            surface: Surface::Git,
             zone: PanelZone::Bottom,
-            context_open: true,
             ..crate::app::UiState::default()
         };
-        open_session_panel(&mut ui);
+        assert!(select_surface(&mut ui, Surface::Changes));
         assert!(ui.context_open);
-        assert_eq!(ui.surface, Surface::Session);
+        assert_eq!(ui.surface, Surface::Changes);
         assert_eq!(ui.zone, PanelZone::Right);
     }
 
     #[test]
-    fn header_session_action_closes_the_session_panel_when_it_is_already_shown() {
+    fn stage_tab_keeps_an_open_panel_in_place() {
         let mut ui = crate::app::UiState {
-            surface: Surface::Session,
-            zone: PanelZone::Right,
             context_open: true,
+            zone: PanelZone::Bottom,
             ..crate::app::UiState::default()
         };
-        open_session_panel(&mut ui);
-        assert!(!ui.context_open);
+        select_surface(&mut ui, Surface::Terminal);
+        assert!(ui.context_open);
+        assert_eq!(ui.surface, Surface::Terminal);
+        assert_eq!(ui.zone, PanelZone::Bottom);
+    }
+
+    #[test]
+    fn stage_tab_stays_open_when_it_is_already_active() {
+        let mut ui = crate::app::UiState {
+            context_open: true,
+            zone: PanelZone::Right,
+            surface: Surface::Session,
+            ..crate::app::UiState::default()
+        };
+        assert!(!select_surface(&mut ui, Surface::Session));
+        assert!(ui.context_open);
         assert_eq!(ui.surface, Surface::Session);
-        assert_eq!(ui.zone, PanelZone::Right);
+    }
+
+    #[test]
+    fn short_session_ids_are_compact() {
+        assert_eq!(short_id("ses_2f1a3b4c"), "2f1a");
+        assert_eq!(short_id(""), "");
     }
 }

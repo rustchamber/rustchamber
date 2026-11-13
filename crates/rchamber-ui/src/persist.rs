@@ -35,6 +35,8 @@ pub struct Settings {
     pub draft_starters: Vec<String>,
     #[serde(default)]
     pub keybindings: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub hidden_providers: Vec<String>,
     #[serde(skip)]
     pub theme_migrated: bool,
 }
@@ -48,15 +50,15 @@ fn default_scale() -> f32 {
 }
 
 fn default_sidebar_width() -> f32 {
-    280.0
+    248.0
 }
 
 fn default_zone_width() -> f32 {
-    640.0
+    340.0
 }
 
 fn default_bottom_height() -> f32 {
-    320.0
+    210.0
 }
 
 impl Default for Settings {
@@ -71,11 +73,12 @@ impl Default for Settings {
             compact_density: false,
             reduce_motion: false,
             accent: None,
-            sidebar_width: 280.0,
-            zone_width: 640.0,
-            bottom_height: 320.0,
+            sidebar_width: 248.0,
+            zone_width: 340.0,
+            bottom_height: 210.0,
             draft_starters: Vec::new(),
             keybindings: std::collections::BTreeMap::new(),
+            hidden_providers: Vec::new(),
             theme_migrated: false,
         }
     }
@@ -99,8 +102,21 @@ impl Settings {
             None => (Self::default(), true),
         };
         settings.theme_migrated = legacy;
+        settings.migrate_shell_widths();
         crate::motion::set_reduced_motion(settings.reduce_motion);
         settings
+    }
+
+    fn migrate_shell_widths(&mut self) {
+        if (self.sidebar_width - 280.0).abs() < f32::EPSILON {
+            self.sidebar_width = default_sidebar_width();
+        }
+        if (self.zone_width - 640.0).abs() < f32::EPSILON {
+            self.zone_width = default_zone_width();
+        }
+        if (self.bottom_height - 320.0).abs() < f32::EPSILON {
+            self.bottom_height = default_bottom_height();
+        }
     }
 
     pub fn resolve_theme_migration(&mut self, system_dark: bool) {

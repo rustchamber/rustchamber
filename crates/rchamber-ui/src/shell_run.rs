@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use eframe::egui::{self, CornerRadius, Margin, RichText, ScrollArea, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Margin, RichText, ScrollArea, Sense, Stroke, Ui, Vec2};
 use rchamber_app::format::duration;
 
-use crate::icons::Icon;
+use crate::icons::{self, Icon};
 use crate::theme::{self, Palette};
 use crate::widgets;
 
@@ -94,49 +94,73 @@ pub fn show(ui: &mut Ui, id: egui::Id, p: &Palette) {
     ui.add_space(6.0);
     egui::Frame::new()
         .fill(p.code_bg)
-        .stroke(Stroke::new(theme::HAIRLINE, p.border))
-        .corner_radius(CornerRadius::same(theme::radius::MD))
-        .inner_margin(Margin::symmetric(10, 8))
+        .stroke(Stroke::new(theme::BORDER, p.border))
+        .corner_radius(CornerRadius::same(theme::radius::TABLE))
+        .inner_margin(Margin {
+            left: 12,
+            right: 12,
+            top: 8,
+            bottom: 8,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let label = if state.running {
-                    "Running…".to_string()
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+                let (label, ink, icon) = if state.running {
+                    ("Running", p.primary_text, Some(Icon::Clock))
                 } else {
                     match state.status {
-                        Some(0) => "Finished".to_string(),
-                        Some(code) => format!("Exited with {code}"),
-                        None => "Finished".to_string(),
+                        Some(0) => ("Finished", p.green, Some(Icon::Check)),
+                        Some(_) => ("Failed", p.error_text, Some(Icon::Warning)),
+                        None => ("Finished", p.fg_muted, None),
                     }
                 };
+                if let Some(icon) = icon {
+                    let (icon_rect, _) =
+                        ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                    icons::paint(ui, icon, icon_rect, ink);
+                }
+                ui.add_space(2.0);
                 ui.label(
                     RichText::new(label)
-                        .font(theme::font_medium(theme::TEXT_META))
-                        .color(if state.status == Some(0) || state.running {
-                            p.fg_muted
-                        } else {
-                            p.red
-                        }),
+                        .font(theme::font_mono(11.5))
+                        .color(ink),
                 );
+                if !state.running {
+                    match state.status {
+                        Some(code) if code != 0 => {
+                            ui.label(
+                                RichText::new(format!("exit {code}"))
+                                    .font(theme::font_mono(11.5))
+                                    .color(p.error_text),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 if !state.running && state.elapsed_ms > 0.0 {
                     ui.label(
                         RichText::new(duration(state.elapsed_ms))
-                            .font(theme::font(theme::TEXT_MICRO))
+                            .font(theme::font_mono(11.5))
                             .color(p.fg_faint),
                     );
                 }
             });
             if !state.output.trim().is_empty() {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 ScrollArea::vertical()
                     .id_salt(id.with("output"))
                     .max_height(260.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(state.output.clone())
-                                .font(theme::font_mono(theme::TEXT_CODE))
-                                .color(p.fg),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(state.output.clone())
+                                    .font(theme::font_mono(theme::TEXT_CODE))
+                                    .color(p.fg)
+                                    .line_height(Some(theme::LINE_CODE_ROW)),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Extend),
                         );
                     });
             }

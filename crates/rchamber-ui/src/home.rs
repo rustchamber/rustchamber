@@ -15,12 +15,12 @@ use crate::motion;
 use crate::theme::{self, Palette};
 use crate::widgets;
 
-const COLUMN: f32 = 768.0;
+const COLUMN: f32 = 760.0;
 const COLUMN_PAD_FRACTION: f32 = 0.025;
 const COLUMN_PAD_MIN: f32 = 12.0;
 const COLUMN_PAD_MAX: f32 = 16.0;
 const COLUMN_MIN: f32 = 240.0;
-const MD_WIDTH: f32 = 768.0;
+const MD_WIDTH: f32 = 760.0;
 
 const HEADING_SIZE: f32 = 24.0;
 const HEADING_LINE: f32 = 32.0;
@@ -222,6 +222,11 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     }
     if matches!(app.model.connection, Connection::Failed(_)) {
         connection_state(ui, app, &p, area);
+        return;
+    }
+    let no_projects = app.model.workspace_projects().is_empty();
+    if no_projects && app.model.active.is_none() && !app.ui.home_session {
+        onboarding(ui, app, &p, area);
         return;
     }
 
@@ -496,9 +501,10 @@ fn target_selector(
     let mut open = app.ui.home_project_menu;
     let mut chosen: Option<String> = None;
     let mut items: Vec<egui::Response> = Vec::new();
-    menu_popup(ui.ctx(), &response, id, &mut open, p, 6.0, |ui, _| {
-        ui.spacing_mut().item_spacing.y = 2.0;
+    menu_popup(ui.ctx(), &response, id, &mut open, p, 8.0, |ui, _| {
+        ui.spacing_mut().item_spacing.y = 6.0;
         ui.set_width(TARGET_MENU_WIDTH);
+        ui.add_space(2.0);
         let mut query = app.ui.home_project_query.clone();
         crate::widgets::search_field(
             ui,
@@ -508,7 +514,7 @@ fn target_selector(
             egui::Id::unique("home-target-search"),
         );
         app.ui.home_project_query = query.clone();
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         let needle = query.trim().to_lowercase();
         let chat = crate::widgets::menu_item_ex(
             ui,
@@ -542,11 +548,13 @@ fn target_selector(
             items.push(item);
         }
         if projects.is_empty() {
+            ui.add_space(4.0);
             ui.label(
                 RichText::new("No projects yet")
-                    .font(theme::font(theme::TEXT_MICRO))
-                    .color(p.fg_muted),
+                    .font(theme::font(theme::TEXT_META))
+                    .color(p.fg_faint),
             );
+            ui.add_space(2.0);
         }
     });
     menu_nav_focus(ui.ctx(), id, open, &items);
@@ -1136,6 +1144,316 @@ fn empty_galley(
     ui.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
+fn wrap_galley(
+    ui: &Ui,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+    width: f32,
+    center: bool,
+) -> Arc<Galley> {
+    let mut job = LayoutJob::default();
+    if center {
+        job.halign = Align::Center;
+    }
+    job.wrap.max_width = width;
+    job.append(
+        text,
+        0.0,
+        TextFormat {
+            font_id: font,
+            color,
+            ..Default::default()
+        },
+    );
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OnboardAction {
+    Add,
+    Clone,
+    Import,
+}
+
+fn wrap_words(ui: &Ui, text: &str, font: &egui::FontId, width: f32) -> Vec<String> {
+    let measure = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_string(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let space = measure(" ");
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0.0;
+    for word in text.split_whitespace() {
+        let word_width = measure(word);
+        if line.is_empty() {
+            line.push_str(word);
+            line_width = word_width;
+        } else if line_width + space + word_width <= width {
+            line.push(' ');
+            line.push_str(word);
+            line_width += space + word_width;
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line.push_str(word);
+            line_width = word_width;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn paint_centered(
+    ui: &Ui,
+    lines: &[String],
+    font: egui::FontId,
+    color: Color32,
+    center_x: f32,
+    top: f32,
+    line_height: f32,
+) {
+    for (index, line) in lines.iter().enumerate() {
+        ui.painter().text(
+            Pos2::new(center_x, top + index as f32 * line_height),
+            Align2::CENTER_TOP,
+            line,
+            font.clone(),
+            color,
+        );
+    }
+}
+
+fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
+    const LOGO: f32 = 52.0;
+    const TILE_HEIGHT: f32 = 96.0;
+    const TILE_GAP: f32 = 10.0;
+    const BODY_WIDTH: f32 = 460.0;
+    const COLUMN: f32 = 540.0;
+    const GRID_WIDTH: f32 = 690.0;
+    const TILE_PAD: f32 = 14.0;
+    const TILE_DESC: f32 = 12.0;
+    const TITLE_LINE: f32 = theme::LINE_HEADING;
+    const BODY_LINE: f32 = theme::LINE_LABEL;
+
+    let width = area.width().min(COLUMN);
+    let center_x = area.center().x;
+    let title_font = theme::font_semibold(theme::TEXT_PAGE_TITLE);
+    let body_font = theme::font(theme::TEXT_UI_LABEL);
+    let title_lines = wrap_words(
+        ui,
+        "Open a project to start a session",
+        &title_font,
+        width,
+    );
+    let body_lines = wrap_words(
+        ui,
+        "RustChamber keeps projects explicit. Pick a local repository, clone from a Git URL, or import existing workspaces from OpenCode. Nothing leaves your machine.",
+        &body_font,
+        width.min(BODY_WIDTH),
+    );
+    let title_height = title_lines.len() as f32 * TITLE_LINE;
+    let body_height = body_lines.len() as f32 * BODY_LINE;
+
+    let grid_width = (area.width() - 32.0).clamp(220.0, GRID_WIDTH);
+    let columns = if grid_width >= 620.0 {
+        3.0
+    } else if grid_width >= 420.0 {
+        2.0
+    } else {
+        1.0
+    };
+    let tile_width = ((grid_width - TILE_GAP * (columns - 1.0)) / columns).max(160.0);
+    let rows = (3.0 / columns).ceil();
+    let mut logo = LOGO;
+    let mut top_gap = 14.0;
+    let mut body_gap = 28.0;
+    let mut tile_height = TILE_HEIGHT;
+    let mut tiles_height = rows * tile_height + (rows - 1.0) * TILE_GAP;
+    let mut total = logo
+        + top_gap
+        + title_height
+        + 6.0
+        + body_height
+        + body_gap
+        + tiles_height;
+    if total + 48.0 > area.height() {
+        logo = 40.0;
+        top_gap = 10.0;
+        body_gap = 16.0;
+        tile_height = 90.0;
+        tiles_height = rows * tile_height + (rows - 1.0) * TILE_GAP;
+        total = logo
+            + top_gap
+            + title_height
+            + 6.0
+            + body_height
+            + body_gap
+            + tiles_height;
+    }
+    let mut y = area.top() + ((area.height() - total) * 0.5).max(16.0);
+
+    let logo_rect = Rect::from_center_size(
+        Pos2::new(center_x, y + logo * 0.5),
+        Vec2::splat(logo),
+    );
+    logo::paint(ui.painter(), logo_rect, p.fade(p.fg, 0.45));
+    y += logo + top_gap;
+
+    paint_centered(ui, &title_lines, title_font, p.fg, center_x, y, TITLE_LINE);
+    y += title_height + 6.0;
+    paint_centered(ui, &body_lines, body_font, p.fg_muted, center_x, y, BODY_LINE);
+    y += body_height + body_gap;
+
+    let tiles = [
+        (
+            OnboardAction::Add,
+            "Add project folder…",
+            "⌘O",
+            "Open an existing local directory and initialize session history.",
+        ),
+        (
+            OnboardAction::Clone,
+            "Clone repository…",
+            "⇧⌘O",
+            "Clone via SSH or HTTPS using your system Git credentials.",
+        ),
+        (
+            OnboardAction::Import,
+            "Import OpenCode",
+            "JSON",
+            "Bring projects, sessions, and custom skills from ~/.opencode.",
+        ),
+    ];
+    let left = center_x - grid_width * 0.5;
+    let mut chosen: Option<OnboardAction> = None;
+    for (index, (action, label, hint, description)) in tiles.iter().enumerate() {
+        let row = (index as f32 / columns).floor();
+        let col = index as f32 % columns;
+        let rect = Rect::from_min_size(
+            Pos2::new(
+                left + col * (tile_width + TILE_GAP),
+                y + row * (tile_height + TILE_GAP),
+            ),
+            Vec2::new(tile_width, tile_height),
+        );
+        let response = ui.interact(
+            rect,
+            Id::unique(("home/onboard", index)),
+            Sense::click(),
+        );
+        crate::widgets::pointer(ui, &response);
+        let hovered = motion::hover_fade(ui, response.id.with("hover"), response.hovered());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::PANEL),
+            p.over(p.card, p.fade(p.hover, hovered)),
+        );
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::PANEL),
+            Stroke::new(
+                theme::BORDER,
+                p.mix(p.border, p.accent_border, hovered),
+            ),
+            StrokeKind::Inside,
+        );
+        let hint_galley = ui.painter().layout_no_wrap(
+            (*hint).to_string(),
+            theme::font_mono(theme::TEXT_TAG),
+            p.fg_muted,
+        );
+        let hint_rect = Rect::from_min_size(
+            Pos2::new(
+                rect.right() - TILE_PAD - hint_galley.size().x - 12.0,
+                rect.top() + TILE_PAD - 1.0,
+            ),
+            Vec2::new(hint_galley.size().x + 12.0, theme::TAG_HEIGHT),
+        );
+        let label_room =
+            (hint_rect.left() - 8.0 - (rect.left() + TILE_PAD)).max(24.0);
+        let full_label = ui.painter().layout_no_wrap(
+            (*label).to_string(),
+            theme::font_semibold(theme::TEXT_UI_LABEL),
+            p.fg,
+        );
+        let label_galley = if full_label.size().x > label_room {
+            egui::WidgetText::from(
+                RichText::new(*label)
+                    .font(theme::font_semibold(theme::TEXT_UI_LABEL))
+                    .color(p.fg),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                label_room,
+                egui::TextStyle::Button,
+            )
+        } else {
+            full_label
+        };
+        ui.painter().galley(
+            Pos2::new(rect.left() + TILE_PAD, rect.top() + TILE_PAD),
+            label_galley,
+            p.fg,
+        );
+        ui.painter().rect_filled(
+            hint_rect,
+            CornerRadius::same(theme::radius::XS),
+            p.tag_bg,
+        );
+        ui.painter().galley(
+            Pos2::new(
+                hint_rect.center().x - hint_galley.size().x * 0.5,
+                hint_rect.center().y - hint_galley.size().y * 0.5,
+            ),
+            hint_galley,
+            p.fg_muted,
+        );
+        let description = wrap_galley(
+            ui,
+            description,
+            theme::font(TILE_DESC),
+            p.fg_muted,
+            rect.width() - TILE_PAD * 2.0,
+            false,
+        );
+        let text_area = Rect::from_min_max(
+            Pos2::new(rect.left() + TILE_PAD, rect.top() + 34.0),
+            Pos2::new(rect.right() - TILE_PAD, rect.bottom() - 8.0),
+        );
+        ui.painter().with_clip_rect(text_area).galley(
+            Pos2::new(rect.left() + TILE_PAD, rect.top() + 38.0),
+            description,
+            p.fg_muted,
+        );
+        if response.clicked() {
+            chosen = Some(*action);
+        }
+    }
+
+    match chosen {
+        Some(OnboardAction::Add) => app.open_add_project(),
+        Some(OnboardAction::Clone) => {
+            app.open_add_project();
+            app.ui.add_project.tab = crate::add_project::Tab::Clone;
+            app.ui.add_project.focus_clone = true;
+        }
+        Some(OnboardAction::Import) => {
+            app.open_add_project();
+            app.ui.add_project.tab = crate::add_project::Tab::OpenCode;
+        }
+        None => {}
+    }
+}
+
 fn connection_state(ui: &Ui, app: &RustChamber, p: &Palette, area: Rect) {
     let Connection::Failed(reason) = app.model.connection.clone() else {
         return;
@@ -1232,8 +1550,8 @@ mod tests {
 
     #[test]
     fn heading_metrics_follow_the_md_breakpoint() {
-        assert_eq!(heading_metrics(767.0), (24.0, 32.0));
-        assert_eq!(heading_metrics(768.0), (30.0, 36.0));
+        assert_eq!(heading_metrics(759.0), (24.0, 32.0));
+        assert_eq!(heading_metrics(760.0), (30.0, 36.0));
         assert_eq!(heading_metrics(1600.0), (30.0, 36.0));
     }
 
@@ -1388,9 +1706,9 @@ mod tests {
 
     #[test]
     fn column_matches_the_composer_width() {
-        assert!((column_width(1440.0) - 720.0).abs() < 0.01);
-        assert!((column_width(1320.0) - 720.0).abs() < 0.01);
-        assert!((column_width(768.0) - 736.0).abs() < 0.01);
+        assert!((column_width(1440.0) - 712.0).abs() < 0.01);
+        assert!((column_width(1320.0) - 712.0).abs() < 0.01);
+        assert!((column_width(768.0) - 728.0).abs() < 0.01);
         assert!((column_width(480.0) - 456.0).abs() < 0.01);
     }
 }

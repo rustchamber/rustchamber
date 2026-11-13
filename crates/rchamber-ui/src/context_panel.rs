@@ -1,20 +1,27 @@
+use std::path::PathBuf;
+
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, Layout, Margin, Pos2, Rect, Response, RichText,
-    ScrollArea, Sense, Shape, Stroke, Ui, Vec2,
+    self, Align, Align2, Color32, CornerRadius, Key, Layout, Margin, Modifiers, Pos2, Rect,
+    Response, RichText, ScrollArea, Sense, Shape, Stroke, Ui, Vec2,
 };
-use rchamber_api::models::{AssistantMessage, McpServer, Message, Part, TokenUsage};
+use rchamber_api::models::{AssistantMessage, FileDiff, McpServer, Message, Part, TokenUsage};
 use rchamber_app::format::{compact_number, duration, money};
 use rchamber_app::{Action, AppModel, Chat, Connection, ToastKind};
+use rchamber_git::{Commit, Status};
 
 use crate::app::{RustChamber, hover_amount, menu_nav_focus, menu_popup};
 use crate::icons::{self, Icon};
-use crate::surfaces::{self, PanelTab};
+use crate::surfaces::{self, PanelTab, Surface};
 use crate::theme::{self, Palette};
 use crate::widgets;
 
 const ROW_HEIGHT: f32 = 28.0;
-const CONTEXT_ROW: f32 = 32.0;
 const SECTION_GAP: f32 = 16.0;
+const BLOCK_GAP: f32 = 12.0;
+const TREE_ROW_HEIGHT: f32 = 26.0;
+const TOUCHED_LIMIT: usize = 8;
+const COMMIT_ROWS: usize = 3;
+const GIT_REFRESH: f64 = 2.0;
 const ICON_SIZE: f32 = 14.0;
 const TEXT_X: f32 = 22.0;
 const SIDE_PAD: f32 = 12.0;
@@ -86,8 +93,18 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let expanded = app.ui.expanded;
     let all_sections = sections_open(ui.ctx());
 
-    let tabs = [PanelTab::new("Session", Icon::Layers).active(true)];
-    surfaces::panel_header(
+    let tab_id = egui::Id::unique("context.inspector.tab");
+    let mut tab: u8 = ui
+        .ctx()
+        .data(|data| data.get_temp::<u8>(tab_id))
+        .unwrap_or(0)
+        .min(2);
+    let tabs = [
+        PanelTab::new("Context", Icon::Layers).active(tab == 0),
+        PanelTab::new("Files", Icon::File).active(tab == 1),
+        PanelTab::new("Git", Icon::Branch).active(tab == 2),
+    ];
+    let header = surfaces::panel_header(
         ui,
         &p,
         &tabs,
@@ -99,16 +116,23 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
             if surfaces::expand_button(ui, &p, expanded).clicked() {
                 toggle_expanded = true;
             }
-            let tip = if all_sections {
-                "Collapse sections"
-            } else {
-                "Expand sections"
-            };
-            if surfaces::panel_button(ui, &p, Icon::Settings, tip).clicked() {
-                toggle_sections = true;
+            if tab == 0 {
+                let tip = if all_sections {
+                    "Collapse sections"
+                } else {
+                    "Expand sections"
+                };
+                if surfaces::panel_button(ui, &p, Icon::Settings, tip).clicked() {
+                    toggle_sections = true;
+                }
             }
         },
     );
+    if let Some(select) = header.select {
+        tab = select.min(2) as u8;
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(tab_id, tab));
+    }
 
     if close {
         app.ui.context_open = false;
@@ -147,7 +171,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
         return;
     }
 
-    body(ui, &p, app);
+    body(ui, &p, app, tab);
 }
 
 fn panel_state(active: bool, connection: &Connection) -> PanelState {
@@ -181,93 +205,854 @@ fn loading_line(ui: &mut Ui, p: &Palette, connection: &Connection) {
     });
 }
 
-fn body(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+fn body(ui: &mut Ui, p: &Palette, app: &mut RustChamber, tab: u8) {
     ScrollArea::vertical()
-        .id_salt("context-panel-scroll")
+        .id_salt(("context-panel-scroll", tab))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             egui::Frame::new()
                 .inner_margin(Margin {
                     left: SIDE_PAD as i8,
                     right: SIDE_PAD as i8,
-                    top: 12,
+                    top: 10,
                     bottom: 24,
                 })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    context_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    project_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    usage_section(ui, p);
-                    ui.add_space(SECTION_GAP);
-                    turn_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    session_totals_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    subagents_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    mcp_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    sources_section(ui, p, app);
-                    ui.add_space(SECTION_GAP);
-                    extensions_section(ui, p, app);
+                    match tab {
+                        1 => files_tab(ui, p, app),
+                        2 => git_tab(ui, p, app),
+                        _ => context_tab(ui, p, app),
+                    }
                 });
         });
 }
 
-fn context_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
-    let (used, limit) = context_reading(app);
-    let fraction = fraction_used(used, limit);
-    let percent = format!("{:.1}%", fraction as f64 * 100.0);
+fn context_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+    telemetry_section(ui, p, app);
+    ui.add_space(BLOCK_GAP);
+    touched_section(ui, p, app);
+    ui.add_space(BLOCK_GAP);
+    workspace_section(ui, p, app);
+    ui.add_space(BLOCK_GAP);
+    extension_status_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    project_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    let rect = ui.available_rect_before_wrap();
+    ui.painter()
+        .hline(rect.left()..=rect.right(), rect.top(), p.hairline());
+    ui.add_space(SECTION_GAP);
+    usage_section(ui, p);
+    ui.add_space(SECTION_GAP);
+    turn_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    session_totals_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    subagents_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    mcp_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    sources_section(ui, p, app);
+    ui.add_space(SECTION_GAP);
+    extensions_section(ui, p, app);
+}
 
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), CONTEXT_ROW), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let center_y = rect.center().y;
-        let ring_rect =
-            Rect::from_center_size(Pos2::new(rect.left() + 15.0, center_y), Vec2::splat(22.0));
-        ring(ui, ring_rect, fraction, p);
-        let label_x = rect.left() + 34.0;
-        ui.painter().text(
-            Pos2::new(label_x, center_y),
-            Align2::LEFT_CENTER,
-            "Context",
-            theme::font(13.0),
-            p.fg,
-        );
-        let percent_galley =
-            ui.painter()
-                .layout_no_wrap(percent, theme::font_mono(12.0), p.fg_muted);
-        ui.painter().galley(
-            Pos2::new(
-                rect.right() - 2.0 - percent_galley.size().x,
-                center_y - percent_galley.size().y * 0.5,
-            ),
-            percent_galley,
-            p.fg_muted,
-        );
-    }
-    response.on_hover_text(format!(
-        "{} of {} tokens used",
-        compact_number(used),
-        compact_number(limit)
-    ));
-
+fn telemetry_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
+    widgets::section_eyebrow(ui, "Session telemetry (local)", p);
     ui.add_space(6.0);
-    let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 3.0), Sense::hover());
-    if !ui.is_rect_visible(bar) {
+    let (used, limit) = context_reading(app);
+    let percent = fraction_used(used, limit) * 100.0;
+    let cost = app
+        .model
+        .active
+        .as_ref()
+        .map(session_totals)
+        .map(|totals| totals.cost)
+        .unwrap_or(0.0);
+    let context_value = format!(
+        "{} / {} ({:.0}%)",
+        quota_number(used),
+        quota_number(limit),
+        percent
+    );
+    let cost_value = format!("{} (Local key)", money(cost));
+
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border))
+        .corner_radius(theme::radius::MD)
+        .inner_margin(Margin::symmetric(10, 10))
+        .show(ui, |ui| {
+            let width = ui.available_width();
+            let column = ((width - 8.0) / 2.0).max(0.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                metric_cell(ui, p, "Context window", &context_value, column);
+                metric_cell(ui, p, "Session cost", &cost_value, column);
+            });
+            ui.add_space(8.0);
+            let (track, _) =
+                ui.allocate_exact_size(Vec2::new(width, 3.0), Sense::hover());
+            ui.painter()
+                .rect_filled(track, CornerRadius::same(2), p.alpha(p.fg, 20));
+            let fraction = fraction_used(used, limit);
+            if fraction > 0.0 {
+                let fill = Rect::from_min_size(
+                    track.min,
+                    Vec2::new((width * fraction).max(3.0), 3.0),
+                );
+                ui.painter()
+                    .rect_filled(fill, CornerRadius::same(2), meter_color(fraction, p));
+            }
+        });
+}
+
+fn metric_cell(ui: &mut Ui, p: &Palette, label: &str, value: &str, width: f32) {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, 0.0),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.add(
+                egui::Label::new(
+                    RichText::new(label)
+                        .font(theme::font_mono(11.5))
+                        .color(p.fg_muted),
+                )
+                .truncate(),
+            );
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(value)
+                        .font(theme::font_mono(11.5))
+                        .color(p.fg),
+                )
+                .truncate(),
+            );
+        },
+    );
+}
+
+fn quota_number(value: f64) -> String {
+    if value >= 1_000_000.0 {
+        format!("{:.1}M", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        let thousands = value / 1_000.0;
+        if (thousands - thousands.round()).abs() < 0.05 {
+            format!("{}k", thousands.round() as i64)
+        } else {
+            format!("{thousands:.1}k")
+        }
+    } else {
+        (value.max(0.0).round() as i64).to_string()
+    }
+}
+
+fn session_files(app: &RustChamber) -> Vec<FileDiff> {
+    app.model
+        .active
+        .as_ref()
+        .map(|chat| chat.diff.clone())
+        .unwrap_or_default()
+}
+
+fn touched_section(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+    let files = session_files(app);
+    widgets::section_eyebrow(
+        ui,
+        &format!("Touched in this session ({})", files.len()),
+        p,
+    );
+    ui.add_space(2.0);
+    if files.is_empty() {
+        muted_note(ui, p, "No files touched yet");
         return;
     }
-    ui.painter()
-        .rect_filled(bar, CornerRadius::same(2), surfaces::edge_muted(p));
-    if fraction > 0.0 {
-        let filled =
-            Rect::from_min_size(bar.min, Vec2::new((bar.width() * fraction).max(3.0), 3.0));
-        ui.painter()
-            .rect_filled(filled, CornerRadius::same(2), meter_color(fraction, p));
+    let mut copy: Option<String> = None;
+    for file in files.iter().take(TOUCHED_LIMIT) {
+        let status = file.status.clone().unwrap_or_else(|| "modified".into());
+        let (letter, color) = status_mark(&status, p);
+        let stats = format!(
+            "{letter} +{} −{}",
+            file.additions, file.deletions
+        );
+        let row = tree_row(ui, p, &file.file, &stats, color, None, 0.0);
+        if row.clicked() {
+            copy = Some(file.file.clone());
+        }
+        row.on_hover_text(&file.file);
     }
+    if let Some(path) = copy {
+        ui.ctx().copy_text(path);
+        app.model.toast(ToastKind::Success, "Path copied");
+    }
+}
+
+fn workspace_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
+    widgets::section_eyebrow(ui, "Workspace tree", p);
+    ui.add_space(2.0);
+    let root = app.workspace_directory();
+    let files = session_files(app);
+    let mut rows = 0;
+    if let Some(entries) = app.model.files.tree.get(&root) {
+        for entry in entries.iter().take(8) {
+            let is_dir = entry.kind == "directory" || entry.kind == "dir";
+            let name = file_name(&entry.path);
+            if is_dir {
+                let count = app
+                    .model
+                    .files
+                    .tree
+                    .get(&entry.path)
+                    .map(|children| children.len())
+                    .unwrap_or(0);
+                let chip = if name.contains("ext") {
+                    Some("Lua 5.4".to_string())
+                } else if count > 0 {
+                    Some(count.to_string())
+                } else {
+                    None
+                };
+                tree_row(
+                    ui,
+                    p,
+                    &format!("{name}/"),
+                    "",
+                    p.fg_muted,
+                    chip.as_deref(),
+                    0.0,
+                );
+            } else {
+                let (badge, color) = workspace_badge(&files, &entry.path, p);
+                tree_row(ui, p, &name, &badge, color, None, 0.0);
+            }
+            rows += 1;
+        }
+    }
+    if rows == 0 {
+        let mut dirs: Vec<(String, usize)> = Vec::new();
+        for file in &files {
+            let Some((dir, _)) = file.file.split_once('/') else {
+                let (badge, color) = workspace_badge(&files, &file.file, p);
+                tree_row(ui, p, &file.file, &badge, color, None, 0.0);
+                continue;
+            };
+            match dirs.iter_mut().find(|(name, _)| name == dir) {
+                Some((_, count)) => *count += 1,
+                None => dirs.push((dir.to_string(), 1)),
+            }
+        }
+        for (dir, count) in dirs.iter().take(6) {
+            tree_row(
+                ui,
+                p,
+                &format!("{dir}/"),
+                &count.to_string(),
+                p.fg_muted,
+                None,
+                0.0,
+            );
+        }
+        if dirs.is_empty() && files.is_empty() {
+            muted_note(ui, p, "No workspace files loaded");
+        }
+    }
+}
+
+fn workspace_badge(files: &[FileDiff], path: &str, p: &Palette) -> (String, Color32) {
+    let Some(file) = files.iter().find(|file| file.file == path) else {
+        return (String::new(), p.fg_muted);
+    };
+    let status = file.status.clone().unwrap_or_else(|| "modified".into());
+    let (letter, color) = status_mark(&status, p);
+    (letter.to_string(), color)
+}
+
+fn extension_status_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
+    widgets::section_eyebrow(ui, "Lua extension status", p);
+    ui.add_space(4.0);
+    let active: Vec<&rchamber_ext::InstalledExtension> = app
+        .model
+        .extensions
+        .installed
+        .iter()
+        .filter(|extension| extension.is_active())
+        .collect();
+    if active.is_empty() {
+        muted_note(ui, p, "No Lua extensions enabled");
+        return;
+    }
+    for extension in active.iter().take(4) {
+        egui::Frame::new()
+            .fill(p.card)
+            .stroke(Stroke::new(theme::HAIRLINE, p.border))
+            .corner_radius(theme::radius::MD)
+            .inner_margin(Margin::symmetric(10, 7))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(
+                        RichText::new(&extension.manifest.name)
+                            .font(theme::font_medium(12.0))
+                            .color(p.fg),
+                    );
+                    ui.label(
+                        RichText::new(format!("v{}", extension.manifest.version))
+                            .font(theme::font_mono(11.0))
+                            .color(p.fg_muted),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        status_chip(ui, "sandboxed", p.success_text, p.success_soft);
+                    });
+                });
+            });
+        ui.add_space(4.0);
+    }
+}
+
+fn files_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+    let files = session_files(app);
+    widgets::section_eyebrow(
+        ui,
+        &format!("Touched in this session ({})", files.len()),
+        p,
+    );
+    ui.add_space(2.0);
+    if files.is_empty() {
+        muted_note(ui, p, "No files touched yet");
+    }
+    for file in files.iter().take(TOUCHED_LIMIT) {
+        let status = file.status.clone().unwrap_or_else(|| "modified".into());
+        let (letter, color) = status_mark(&status, p);
+        let stats = format!("{letter} +{} −{}", file.additions, file.deletions);
+        tree_row(ui, p, &file.file, &stats, color, None, 0.0);
+    }
+    ui.add_space(BLOCK_GAP);
+    workspace_section(ui, p, app);
+    ui.add_space(BLOCK_GAP);
+    if widgets::app_button(
+        ui,
+        "Open the Files panel",
+        Some(Icon::File),
+        widgets::ButtonVariant::Outline,
+        p,
+    )
+    .clicked()
+    {
+        app.ui.surface = Surface::Files;
+        app.ui.context_open = true;
+    }
+}
+
+fn tree_row(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    right: &str,
+    right_color: Color32,
+    chip: Option<&str>,
+    indent: f32,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), TREE_ROW_HEIGHT),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &response);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.hover);
+    }
+    let left = rect.left() + 6.0 + indent;
+    let right_edge = rect.right() - 6.0;
+    let chip_width = chip
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    label.to_string(),
+                    theme::font_mono(11.0),
+                    p.fg_muted,
+                )
+                .size()
+                .x
+                + 12.0
+        })
+        .unwrap_or(0.0);
+    let stats_width = if right.is_empty() {
+        0.0
+    } else {
+        ui.painter()
+            .layout_no_wrap(right.to_string(), theme::font_mono(11.0), right_color)
+            .size()
+            .x
+            + 8.0
+    };
+    let label_width = (right_edge - left - chip_width - stats_width).max(24.0);
+    let galley = surfaces::truncated_galley(
+        ui,
+        label.to_string(),
+        theme::font_mono(12.0),
+        p.fg_muted,
+        label_width,
+    );
+    ui.painter().galley(
+        Pos2::new(left, rect.center().y - galley.size().y * 0.5),
+        galley,
+        p.fg_muted,
+    );
+    let mut x = right_edge;
+    if let Some(label) = chip {
+        let galley = ui.painter().layout_no_wrap(
+            label.to_string(),
+            theme::font_mono(11.0),
+            p.fg_muted,
+        );
+        let chip_rect = Rect::from_min_size(
+            Pos2::new(
+                x - galley.size().x - 12.0,
+                rect.center().y - theme::TAG_HEIGHT * 0.5,
+            ),
+            Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        );
+        ui.painter().rect_filled(
+            chip_rect,
+            CornerRadius::same(theme::radius::XS),
+            p.tag_bg,
+        );
+        ui.painter().galley(
+            Pos2::new(chip_rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            p.fg_muted,
+        );
+        x = chip_rect.left() - 6.0;
+    }
+    if !right.is_empty() {
+        ui.painter().text(
+            Pos2::new(x, rect.center().y),
+            Align2::RIGHT_CENTER,
+            right,
+            theme::font_mono(11.0),
+            right_color,
+        );
+    }
+    response
+}
+
+fn status_chip(ui: &mut Ui, label: &str, fg: Color32, bg: Color32) {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(11.0),
+        fg,
+    );
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
+        Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
+    ui.painter().galley(
+        Pos2::new(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        fg,
+    );
+}
+
+fn status_mark(status: &str, p: &Palette) -> (&'static str, Color32) {
+    match status.to_ascii_lowercase().as_str() {
+        "added" | "untracked" => ("A", p.green),
+        "deleted" | "removed" => ("D", p.red),
+        "renamed" => ("R", p.blue),
+        "copied" => ("C", p.blue),
+        "conflicted" | "conflict" => ("!", p.coral),
+        _ => ("M", p.coral),
+    }
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+#[derive(Clone, Default)]
+struct GitCache {
+    root: Option<PathBuf>,
+    status: Status,
+    commits: Vec<Commit>,
+    loaded_at: f64,
+}
+
+fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
+    let now = ui.input(|input| input.time);
+    let cache_id = egui::Id::unique("context.git.cache");
+    let mut cache: GitCache = ui
+        .ctx()
+        .data(|data| data.get_temp(cache_id))
+        .unwrap_or_default();
+    let start = app.workspace_directory();
+    let root = rchamber_git::discover(std::path::Path::new(&start));
+    let stale =
+        cache.loaded_at == 0.0 || now - cache.loaded_at > GIT_REFRESH || cache.root != root;
+    if stale {
+        cache = GitCache {
+            root: root.clone(),
+            status: root
+                .as_deref()
+                .and_then(|root| rchamber_git::status(root).ok())
+                .unwrap_or_default(),
+            commits: root
+                .as_deref()
+                .and_then(|root| rchamber_git::log(root, COMMIT_ROWS).ok())
+                .unwrap_or_default(),
+            loaded_at: now,
+        };
+    }
+
+    let summary_id = egui::Id::unique("context.git.summary");
+    let description_id = egui::Id::unique("context.git.description");
+    let mut summary: String = ui.ctx().data(|data| data.get_temp(summary_id)).unwrap_or_default();
+    let mut description: String = ui
+        .ctx()
+        .data(|data| data.get_temp(description_id))
+        .unwrap_or_default();
+
+    let staged: Vec<String> = cache.status.staged().map(|file| file.path.clone()).collect();
+    let unstaged: Vec<String> = cache
+        .status
+        .unstaged()
+        .map(|file| file.path.clone())
+        .collect();
+    let branch = cache
+        .status
+        .branch
+        .clone()
+        .or_else(|| {
+            app.model
+                .vcs
+                .as_ref()
+                .and_then(|vcs| vcs.branch.as_ref())
+                .and_then(|branch| branch.current.clone())
+        })
+        .unwrap_or_else(|| "No repository".into());
+
+    let mut stage_all = false;
+    let mut unstage_all = false;
+    let mut fetch = false;
+    let mut pull = false;
+    let mut push = false;
+    let mut commit = false;
+
+    let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::hover());
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, p.bg_soft);
+    ui.painter().hline(
+        bar.x_range(),
+        bar.bottom(),
+        Stroke::new(theme::HAIRLINE, p.border),
+    );
+    icons::paint(
+        ui,
+        Icon::Branch,
+        Rect::from_center_size(Pos2::new(bar.left() + 12.0, bar.center().y), Vec2::splat(14.0)),
+        p.fg_muted,
+    );
+    let branch_galley = surfaces::truncated_galley(
+        ui,
+        branch.clone(),
+        theme::font_medium(12.5),
+        p.fg,
+        (bar.width() - 160.0).max(40.0),
+    );
+    ui.painter().galley(
+        Pos2::new(bar.left() + 22.0, bar.center().y - branch_galley.size().y * 0.5),
+        branch_galley,
+        p.fg,
+    );
+    let mut button_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar.shrink2(Vec2::new(6.0, 5.0)))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    button_ui.spacing_mut().item_spacing.x = 4.0;
+    let can_fetch = cache.root.is_some();
+    if widgets::button_ex(
+        &mut button_ui,
+        "Push",
+        None,
+        widgets::ButtonVariant::Outline,
+        widgets::ButtonSize::App,
+        can_fetch,
+        p,
+    )
+    .clicked()
+    {
+        push = true;
+    }
+    if widgets::button_ex(
+        &mut button_ui,
+        "Pull",
+        None,
+        widgets::ButtonVariant::Outline,
+        widgets::ButtonSize::App,
+        can_fetch,
+        p,
+    )
+    .clicked()
+    {
+        pull = true;
+    }
+    if widgets::button_ex(
+        &mut button_ui,
+        "Fetch",
+        None,
+        widgets::ButtonVariant::Outline,
+        widgets::ButtonSize::App,
+        can_fetch,
+        p,
+    )
+    .clicked()
+    {
+        fetch = true;
+    }
+    ui.painter().text(
+        Pos2::new(button_ui.min_rect().left() - 8.0, bar.center().y),
+        Align2::RIGHT_CENTER,
+        format!("↑{} ↓{}", cache.status.ahead, cache.status.behind),
+        theme::font_mono(11.0),
+        p.fg_muted,
+    );
+
+    ui.add_space(10.0);
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border))
+        .corner_radius(theme::radius::MD)
+        .inner_margin(Margin::same(10))
+        .show(ui, |ui| {
+            commit_field(ui, p, &mut summary, "Commit summary", 28.0);
+            ui.add_space(6.0);
+            commit_field(ui, p, &mut description, "Description", 54.0);
+            ui.add_space(8.0);
+            let label = if staged.len() == 1 {
+                "Commit 1 staged file (⌘↵)".to_string()
+            } else {
+                format!("Commit {} staged files (⌘↵)", staged.len())
+            };
+            let enabled = !staged.is_empty() && !summary.trim().is_empty();
+            let clicked = widgets::button_ex(
+                ui,
+                &label,
+                None,
+                widgets::ButtonVariant::Primary,
+                widgets::ButtonSize::Sm,
+                enabled,
+                p,
+            )
+            .clicked();
+            if enabled
+                && (clicked
+                    || (ui.ui_contains_pointer()
+                        && ui.input_mut(|input| {
+                            input.consume_key(Modifiers::COMMAND, Key::Enter)
+                        })))
+            {
+                commit = true;
+            }
+        });
+
+    ui.add_space(BLOCK_GAP);
+    if eyebrow_action(
+        ui,
+        p,
+        &format!("Staged changes ({})", staged.len()),
+        Some("Unstage all"),
+        Some(!staged.is_empty()),
+    ) {
+        unstage_all = true;
+    }
+    for path in staged.iter().take(TOUCHED_LIMIT) {
+        tree_row(ui, p, path, "M −", p.success_text, None, 0.0);
+    }
+    ui.add_space(BLOCK_GAP);
+    if eyebrow_action(
+        ui,
+        p,
+        &format!("Unstaged changes ({})", unstaged.len()),
+        Some("Stage all"),
+        Some(!unstaged.is_empty()),
+    ) {
+        stage_all = true;
+    }
+    for path in unstaged.iter().take(TOUCHED_LIMIT) {
+        tree_row(ui, p, path, "M +", p.coral, None, 0.0);
+    }
+    ui.add_space(BLOCK_GAP);
+    eyebrow_action(ui, p, "Recent commits", None, None);
+    for commit in cache.commits.iter().take(COMMIT_ROWS) {
+        let short = commit.hash.get(..7).unwrap_or(&commit.hash);
+        tree_row(ui, p, &commit.subject, short, p.primary_text, None, 0.0);
+    }
+    if cache.commits.is_empty() {
+        muted_note(ui, p, "No commits yet");
+    }
+
+    if !stage_all
+        && !unstage_all
+        && !fetch
+        && !pull
+        && !push
+        && !commit
+    {
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(summary_id, summary.clone());
+            data.insert_temp(description_id, description.clone());
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(cache_id, cache));
+        return;
+    }
+
+    if let Some(root) = cache.root.clone() {
+        let mut result: Vec<String> = Vec::new();
+        let mut error: Option<String> = None;
+        if stage_all {
+            for path in &unstaged {
+                if let Err(failure) = rchamber_git::stage(&root, path) {
+                    error = Some(failure.to_string());
+                }
+            }
+            result.push(format!("Staged {} files", unstaged.len()));
+        }
+        if unstage_all {
+            for path in &staged {
+                if let Err(failure) = rchamber_git::unstage(&root, path) {
+                    error = Some(failure.to_string());
+                }
+            }
+            result.push(format!("Unstaged {} files", staged.len()));
+        }
+        if fetch && let Err(failure) = rchamber_git::fetch(&root) {
+            error = Some(failure.to_string());
+        }
+        if pull && let Err(failure) = rchamber_git::pull(&root) {
+            error = Some(failure.to_string());
+        }
+        if push && let Err(failure) = rchamber_git::push(&root) {
+            error = Some(failure.to_string());
+        }
+        if commit && !summary.trim().is_empty() {
+            let message = if description.trim().is_empty() {
+                summary.trim().to_string()
+            } else {
+                format!("{}\n\n{}", summary.trim(), description.trim())
+            };
+            match rchamber_git::commit(&root, &message) {
+                Ok(()) => {
+                    result.push("Committed staged changes".into());
+                    summary.clear();
+                    description.clear();
+                }
+                Err(failure) => error = Some(failure.to_string()),
+            }
+        }
+        if let Some(error) = error {
+            app.model.toast(ToastKind::Error, error);
+        } else if let Some(message) = result.first() {
+            app.model.toast(ToastKind::Success, message.clone());
+        }
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(summary_id, summary.clone());
+            data.insert_temp(description_id, description.clone());
+            data.insert_temp(cache_id, GitCache::default());
+        });
+    }
+}
+
+fn commit_field(ui: &mut Ui, p: &Palette, text: &mut String, hint: &str, height: f32) {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), height),
+        Sense::click(),
+    );
+    let id = response.id.with(("commit-field", hint));
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    let corner = CornerRadius::same(theme::radius::XS);
+    ui.painter().rect_filled(rect, corner, p.bg_soft);
+    ui.painter().rect_stroke(
+        rect,
+        corner,
+        Stroke::new(
+            if focused { theme::BORDER } else { theme::HAIRLINE },
+            if focused { p.border_focus } else { p.border },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    let text_rect = rect.shrink2(Vec2::new(8.0, 5.0));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text_rect)
+            .layout(Layout::left_to_right(Align::Min)),
+    );
+    let multiline = height > 40.0;
+    let edit = if multiline {
+        egui::TextEdit::multiline(text)
+    } else {
+        egui::TextEdit::singleline(text)
+    }
+    .id(id)
+    .frame(egui::Frame::NONE)
+    .margin(Margin::ZERO)
+    .hint_text(
+        RichText::new(hint)
+            .font(theme::font(12.0))
+            .color(p.fg_faint),
+    )
+    .font(theme::font(12.0))
+    .text_color(p.fg)
+    .desired_width(f32::INFINITY);
+    child.add(edit);
+    if response.clicked() {
+        child.memory_mut(|memory| memory.request_focus(id));
+    }
+}
+
+fn eyebrow_action(
+    ui: &mut Ui,
+    p: &Palette,
+    text: &str,
+    action: Option<&str>,
+    enabled: Option<bool>,
+) -> bool {
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), 22.0),
+        Sense::hover(),
+    );
+    ui.painter().text(
+        Pos2::new(rect.left(), rect.center().y),
+        Align2::LEFT_CENTER,
+        text.to_uppercase(),
+        theme::font_mono(11.0),
+        p.fg_muted,
+    );
+    let Some(action) = action else {
+        return false;
+    };
+    let enabled = enabled.unwrap_or(true);
+    let galley = ui.painter().layout_no_wrap(
+        action.to_string(),
+        theme::font(11.5),
+        if enabled { p.primary } else { p.disabled },
+    );
+    let action_rect = Rect::from_min_max(
+        Pos2::new(rect.right() - galley.size().x - 2.0, rect.top()),
+        rect.max,
+    );
+    ui.painter().galley(
+        Pos2::new(action_rect.left(), rect.center().y - galley.size().y * 0.5),
+        galley,
+        if enabled { p.primary } else { p.disabled },
+    );
+    enabled && ui.interact(action_rect, ui.scope_id().with((text, action)), Sense::click()).clicked()
 }
 
 fn fraction_used(used: f64, limit: f64) -> f32 {
@@ -1414,30 +2199,28 @@ fn meter_color(fraction: f32, p: &Palette) -> Color32 {
     }
 }
 
-fn ring(ui: &Ui, rect: Rect, fraction: f32, p: &Palette) {
-    let center = rect.center();
-    let radius = rect.width() * 0.42;
-    ui.painter()
-        .circle_stroke(center, radius, Stroke::new(2.2, surfaces::edge_muted(p)));
-    let segments = 48;
-    let start = -std::f32::consts::FRAC_PI_2;
-    let end = start + fraction * std::f32::consts::TAU;
-    let color = meter_color(fraction, p);
-    let mut points = Vec::new();
-    for index in 0..=segments {
-        let angle = start + (end - start) * index as f32 / segments as f32;
-        points.push(Pos2::new(
-            center.x + radius * angle.cos(),
-            center.y + radius * angle.sin(),
-        ));
-    }
-    ui.painter()
-        .add(Shape::line(points, Stroke::new(2.2, color)));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_numbers_match_the_telemetry_card() {
+        assert_eq!(quota_number(38_400.0), "38.4k");
+        assert_eq!(quota_number(200_000.0), "200k");
+        assert_eq!(quota_number(1_200.0), "1.2k");
+        assert_eq!(quota_number(950.0), "950");
+        assert_eq!(quota_number(1_250_000.0), "1.2M");
+    }
+
+    #[test]
+    fn status_marks_cover_the_git_letters() {
+        let p = Palette::dark();
+        assert_eq!(status_mark("added", &p).0, "A");
+        assert_eq!(status_mark("untracked", &p).0, "A");
+        assert_eq!(status_mark("deleted", &p).0, "D");
+        assert_eq!(status_mark("modified", &p).0, "M");
+        assert_eq!(status_mark("renamed", &p).0, "R");
+    }
 
     #[test]
     fn cache_hit_ignores_an_empty_window() {

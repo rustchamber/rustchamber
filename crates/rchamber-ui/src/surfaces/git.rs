@@ -632,8 +632,14 @@ fn group(
         .layout_no_wrap(label.to_string(), theme::font_semibold(14.0), p.fg)
         .size()
         .x;
+    let count_left = rect.left() + 40.0 + label_width + 8.0;
+    let count_width = ui
+        .painter()
+        .layout_no_wrap(count.to_string(), theme::font(12.5), p.fg_muted)
+        .size()
+        .x;
     ui.painter().text(
-        egui::Pos2::new(rect.left() + 40.0 + label_width + 8.0, rect.center().y),
+        egui::Pos2::new(count_left, rect.center().y),
         Align2::LEFT_CENTER,
         count.to_string(),
         theme::font(12.5),
@@ -643,7 +649,7 @@ fn group(
         ui,
         Icon::ChevronDown,
         Rect::from_center_size(
-            egui::Pos2::new(rect.left() + 40.0 + label_width + 26.0, rect.center().y),
+            egui::Pos2::new(count_left + count_width + 10.0, rect.center().y),
             Vec2::splat(12.0),
         ),
         p.fg_muted,
@@ -1492,11 +1498,11 @@ fn report(
 fn status_color(p: &Palette, letter: char) -> Color32 {
     match letter {
         'A' => p.green,
-        'M' => p.coral,
+        'M' => p.diff_modified,
         'D' => p.red,
         'R' | 'C' => p.blue,
-        'U' => p.coral,
-        'T' => p.purple,
+        'U' => p.green,
+        'T' => p.info_text,
         _ => p.fg_muted,
     }
 }
@@ -1506,16 +1512,11 @@ fn file_visual(path: &str, p: &Palette) -> (Icon, Color32) {
         .rsplit_once('.')
         .map(|(_, value)| value.to_ascii_lowercase())
         .unwrap_or_default();
-    match extension.as_str() {
-        "rs" => (Icon::File, p.coral),
-        "ts" | "tsx" => (Icon::File, p.blue),
-        "js" | "jsx" | "json" | "jsonc" => (Icon::File, p.primary),
-        "md" | "mdx" | "txt" => (Icon::File, p.blue),
-        "css" | "scss" => (Icon::File, p.purple),
-        "html" | "htm" | "svg" | "xml" => (Icon::File, p.coral),
-        "sh" | "bash" | "zsh" => (Icon::Terminal, p.green),
-        _ => (Icon::File, p.fg_muted),
-    }
+    let icon = match extension.as_str() {
+        "sh" | "bash" | "zsh" => Icon::Terminal,
+        _ => Icon::File,
+    };
+    (icon, p.fg_muted)
 }
 
 fn commit_time(seconds: i64) -> String {

@@ -25,6 +25,7 @@ pub const HAIRLINE: f32 = 0.5;
 
 const TAB_SIDE_PAD: f32 = 12.0;
 const TAB_ICON: f32 = 16.0;
+const TAB_DOT: f32 = 5.0;
 const TAB_LABEL_GAP: f32 = 6.0;
 const TAB_CLOSE: f32 = 20.0;
 const TAB_CLOSE_GAP: f32 = 4.0;
@@ -318,28 +319,30 @@ pub fn panel_header(
 
 fn paint_mode_label(ui: &mut Ui, p: &Palette, tab: &PanelTab, row: Rect, right: f32) -> f32 {
     let left = row.left() + TAB_SIDE_PAD;
-    icons::paint(
-        ui,
-        tab.icon,
-        Rect::from_center_size(
-            Pos2::new(left + MODE_ICON * 0.5, row.center().y),
-            Vec2::splat(MODE_ICON),
-        ),
-        p.fg,
+    let marker = Rect::from_center_size(
+        Pos2::new(left + MODE_ICON * 0.5, row.center().y),
+        Vec2::splat(MODE_ICON),
     );
+    if tab.active {
+        ui.painter()
+            .circle_filled(marker.center(), TAB_DOT * 0.5, p.primary);
+    } else {
+        icons::paint(ui, tab.icon, marker, p.fg_muted);
+    }
     let text_left = left + MODE_ICON + TAB_LABEL_GAP;
     let width = (right - text_left - TAB_SIDE_PAD).max(24.0);
+    let color = if tab.active { p.fg } else { p.fg_muted };
     let galley = truncated_galley(
         ui,
         tab.label.clone(),
         theme::font(theme::TEXT_UI_LABEL),
-        p.fg,
+        color,
         width,
     );
     ui.painter().galley(
         Pos2::new(text_left, row.center().y - galley.size().y * 0.5),
         galley.clone(),
-        p.fg,
+        color,
     );
     (text_left + galley.size().x + TAB_SIDE_PAD).min(right)
 }
@@ -658,15 +661,16 @@ fn paint_panel_tab(ui: &Ui, p: &Palette, tab: &PanelTab, rect: Rect, hover: f32,
         },
         opacity,
     );
-    icons::paint(
-        ui,
-        tab.icon,
-        Rect::from_center_size(
-            Pos2::new(rect.left() + TAB_SIDE_PAD + TAB_ICON * 0.5, rect.center().y),
-            Vec2::splat(TAB_ICON),
-        ),
-        icon_color,
+    let marker = Rect::from_center_size(
+        Pos2::new(rect.left() + TAB_SIDE_PAD + TAB_ICON * 0.5, rect.center().y),
+        Vec2::splat(TAB_ICON),
     );
+    if tab.active {
+        ui.painter()
+            .circle_filled(marker.center(), TAB_DOT * 0.5, theme::scale_alpha(p.primary, opacity));
+    } else {
+        icons::paint(ui, tab.icon, marker, icon_color);
+    }
     let text_left = rect.left() + TAB_SIDE_PAD + TAB_ICON + TAB_LABEL_GAP;
     let text_width = (rect.right() - close_reserve - TAB_SIDE_PAD - text_left).max(8.0);
     let galley = truncated_galley(
@@ -1123,6 +1127,40 @@ mod tests {
 
         assert_eq!(selected, None);
         assert_eq!(closed, None);
+    }
+
+    #[test]
+    fn the_active_surface_carries_the_accent_dot() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let p = Palette::dark();
+        let tabs = [PanelTab::new("Context", Icon::Layers).active(true)];
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                panel_header(ui, &p, &tabs, |_| {}, |_| {});
+            });
+        });
+        output.textures_delta.clear();
+
+        let mut shapes = Vec::new();
+        for clipped in &output.shapes {
+            flatten_shape(&clipped.shape, &mut shapes);
+        }
+        let dot = shapes.iter().find_map(|shape| match shape {
+            egui::Shape::Circle(circle)
+                if circle.fill == p.primary
+                    && (circle.radius - TAB_DOT * 0.5).abs() < 0.01 =>
+            {
+                Some(circle)
+            }
+            _ => None,
+        });
+        assert!(dot.is_some(), "active surface dot");
     }
 
     #[test]

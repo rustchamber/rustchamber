@@ -6,12 +6,13 @@ pub fn paint(painter: &eframe::egui::Painter, rect: Rect, color: Color32) {
     if size <= 0.0 || color.a() == 0 {
         return;
     }
+    let origin = rect.center() - Vec2::splat(size * 0.5);
     let stroke = (size * 0.093).max(1.0);
     let radius = stroke * 0.5;
-    let left = rect.left() + size * 0.20;
-    let right = rect.left() + size * 0.80;
-    let top = rect.top() + size * 0.16;
-    let bottom = rect.top() + size * 0.84;
+    let left = origin.x + size * 0.20;
+    let right = origin.x + size * 0.80;
+    let top = origin.y + size * 0.16;
+    let bottom = origin.y + size * 0.84;
     let arm = size * 0.13;
 
     for (x, direction) in [(left, 1.0), (right, -1.0)] {
@@ -33,7 +34,10 @@ pub fn paint(painter: &eframe::egui::Painter, rect: Rect, color: Color32) {
     }
 
     let caret_width = (size * 0.075).max(1.0);
-    let caret = Rect::from_center_size(rect.center(), Vec2::new(caret_width, size * 0.30));
+    let caret = Rect::from_center_size(
+        Pos2::new(origin.x + size * 0.5, origin.y + size * 0.5),
+        Vec2::new(caret_width, size * 0.30),
+    );
     painter.rect_filled(
         caret,
         CornerRadius::same((caret_width * 0.5).round() as u8),

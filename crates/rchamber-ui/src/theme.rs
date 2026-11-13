@@ -31,10 +31,14 @@ pub const INK_CONTRAST: f32 = 4.5;
 pub mod radius {
     pub const XS: u8 = 4;
     pub const SM: u8 = 5;
+    pub const TAG: u8 = 6;
     pub const INLINE_CODE: u8 = 6;
     pub const MD: u8 = 7;
+    pub const DEMO: u8 = 7;
+    pub const MENU_ITEM: u8 = 8;
     pub const TABLE: u8 = 8;
     pub const LG: u8 = 9;
+    pub const BUTTON: u8 = 9;
     pub const PANEL: u8 = 10;
     pub const XL: u8 = 12;
     pub const CODE_BLOCK: u8 = 16;
@@ -45,6 +49,7 @@ pub const SPACE_1: f32 = 4.0;
 pub const SPACE_2: f32 = 8.0;
 pub const SPACE_3: f32 = 12.0;
 pub const SPACE_4: f32 = 16.0;
+pub const SPACE_5: f32 = 20.0;
 pub const SPACE_6: f32 = 24.0;
 pub const SPACE_8: f32 = 32.0;
 
@@ -54,9 +59,16 @@ pub const TEXT_CODE_HEADER: f32 = 13.0;
 pub const TEXT_UI_HEADER: f32 = 14.0;
 pub const TEXT_UI_SECTION: f32 = 15.0;
 pub const TEXT_UI_LABEL: f32 = 13.5;
+pub const TEXT_BUTTON: f32 = 12.5;
 pub const TEXT_META: f32 = 12.5;
 pub const TEXT_MICRO: f32 = 12.0;
+pub const TEXT_TAG: f32 = 11.0;
 pub const TEXT_PAGE_TITLE: f32 = 17.0;
+
+pub const BUTTON_HEIGHT: f32 = 26.0;
+pub const ICON_BUTTON: f32 = 24.0;
+pub const TAG_HEIGHT: f32 = 18.0;
+pub const KEYCAP_HEIGHT: f32 = 18.0;
 
 pub const LINE_PROSE: f32 = 23.0;
 pub const LINE_USER: f32 = 26.0;
@@ -65,6 +77,7 @@ pub const LINE_HEADER: f32 = 20.0;
 pub const LINE_SECTION: f32 = 22.0;
 pub const LINE_META: f32 = 18.0;
 pub const LINE_TIGHT: f32 = 17.0;
+pub const LINE_TAG: f32 = 17.0;
 pub const LINE_CODE: f32 = 23.0;
 pub const LINE_CODE_ROW: f32 = 22.0;
 pub const LINE_HEADING: f32 = 26.0;
@@ -183,6 +196,21 @@ pub struct Palette {
     pub tool_description: Color32,
     pub chat_divider: Color32,
     pub elevation_ring: Color32,
+    pub accent_soft: Color32,
+    pub accent_border: Color32,
+    pub warning_soft: Color32,
+    pub warning_border: Color32,
+    pub error_soft: Color32,
+    pub error_border: Color32,
+    pub success_soft: Color32,
+    pub success_border: Color32,
+    pub info_soft: Color32,
+    pub info_border: Color32,
+    pub tag_bg: Color32,
+    pub diff_added_bg: Color32,
+    pub diff_added_emph: Color32,
+    pub diff_removed_bg: Color32,
+    pub diff_removed_emph: Color32,
 }
 
 impl Palette {
@@ -198,29 +226,29 @@ impl Palette {
             border: Color32::from_rgba_unmultiplied(0x24, 0x23, 0x23, 0xBF),
             border_soft: Color32::TRANSPARENT,
             fg: hex(0xDB, 0xD7, 0xCC),
-            fg_muted: hex(0x89, 0x86, 0x7C),
-            fg_faint: hex(0x69, 0x66, 0x5E),
+            fg_muted: hex(0x9E, 0x9A, 0x90),
+            fg_faint: hex(0x7C, 0x79, 0x70),
             primary: hex(0xDA, 0x7C, 0x47),
-            on_primary: hex(0x00, 0x00, 0x00),
+            on_primary: hex(0x12, 0x0F, 0x0E),
             primary_text: hex(0xE2, 0x99, 0x6F),
             red: hex(0xDA, 0x5B, 0x4A),
             error_text: hex(0xE1, 0x77, 0x68),
             green: hex(0x76, 0xAD, 0x4F),
             blue: hex(0x47, 0x9F, 0xE6),
-            coral: hex(0xC6, 0x7F, 0x13),
+            coral: hex(0xC8, 0x84, 0x1B),
             purple: hex(0x99, 0x88, 0xE5),
             code_bg: hex(0x10, 0x0E, 0x0D),
             user_bg: hex(0x2D, 0x1C, 0x12),
             selection: Color32::from_rgba_unmultiplied(0xC8, 0xC6, 0xC5, 0x2B),
             shadow: Color32::from_black_alpha(120),
-            subtle: hex(0x17, 0x16, 0x16),
-            overlay: Color32::from_black_alpha(0x99),
+            subtle: hex(0x0E, 0x0C, 0x0B),
+            overlay: Color32::from_black_alpha(0x9E),
             border_hover: hex(0x50, 0x4E, 0x4C),
             border_focus: hex(0xDA, 0x7C, 0x47),
-            focus_ring: Color32::from_rgba_unmultiplied(0xDA, 0x7C, 0x47, 0x55),
+            focus_ring: Color32::from_rgba_unmultiplied(0xDA, 0x7C, 0x47, 0x66),
             selection_fg: hex(0xDB, 0xD7, 0xCC),
-            disabled: Color32::from_rgba_unmultiplied(0xDB, 0xD7, 0xCC, 0x80),
-            body: Color32::from_rgba_unmultiplied(0xDB, 0xD7, 0xCC, 0xE6),
+            disabled: Color32::from_rgba_unmultiplied(0xDB, 0xD7, 0xCC, 0x6B),
+            body: hex(0xC5, 0xC1, 0xB6),
             primary_hover: hex(0xEB, 0x8C, 0x57),
             primary_active: hex(0xFD, 0x9B, 0x66),
             markdown_link: hex(0x5D, 0x99, 0xA9),
@@ -237,13 +265,13 @@ impl Palette {
             scrollbar_hover: Color32::from_rgba_unmultiplied(0x87, 0x7F, 0x73, 0x5C),
             info_text: hex(0x47, 0x9F, 0xE6),
             success_text: hex(0x76, 0xAD, 0x4F),
-            warning_text: hex(0xC8, 0x84, 0x1B),
+            warning_text: hex(0xE1, 0xAD, 0x57),
             status_error_text: hex(0xDB, 0x60, 0x4F),
-            status_warning_text: hex(0xC6, 0x7F, 0x13),
+            status_warning_text: hex(0xC8, 0x84, 0x1B),
             status_success_text: hex(0x76, 0xAD, 0x4F),
             status_info_text: hex(0x47, 0x9F, 0xE6),
-            diff_added: hex(0x4D, 0x93, 0x4E),
-            diff_removed: hex(0xCB, 0x76, 0x76),
+            diff_added: hex(0x76, 0xAD, 0x4F),
+            diff_removed: hex(0xE1, 0x77, 0x68),
             diff_modified: hex(0x5D, 0x99, 0xA9),
             tool_border: Color32::from_rgba_unmultiplied(0x30, 0x2E, 0x2B, 0x73),
             tool_icon: hex(0x94, 0x91, 0x87),
@@ -251,6 +279,21 @@ impl Palette {
             tool_description: hex(0x94, 0x91, 0x87),
             chat_divider: hex(0x30, 0x2E, 0x2B),
             elevation_ring: Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            accent_soft: Color32::from_rgba_unmultiplied(0xDA, 0x7C, 0x47, 38),
+            accent_border: Color32::from_rgba_unmultiplied(0xDA, 0x7C, 0x47, 97),
+            warning_soft: Color32::from_rgba_unmultiplied(0xC8, 0x84, 0x1B, 38),
+            warning_border: Color32::from_rgba_unmultiplied(0xC8, 0x84, 0x1B, 87),
+            error_soft: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 38),
+            error_border: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 87),
+            success_soft: Color32::from_rgba_unmultiplied(0x76, 0xAD, 0x4F, 36),
+            success_border: Color32::from_rgba_unmultiplied(0x76, 0xAD, 0x4F, 82),
+            info_soft: Color32::from_rgba_unmultiplied(0x47, 0x9F, 0xE6, 36),
+            info_border: Color32::from_rgba_unmultiplied(0x47, 0x9F, 0xE6, 87),
+            tag_bg: Color32::from_rgba_unmultiplied(0xDB, 0xD7, 0xCC, 18),
+            diff_added_bg: Color32::from_rgba_unmultiplied(0x76, 0xAD, 0x4F, 36),
+            diff_added_emph: Color32::from_rgba_unmultiplied(0x76, 0xAD, 0x4F, 71),
+            diff_removed_bg: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 38),
+            diff_removed_emph: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 77),
         };
         palette.border_soft = palette.edge_muted();
         palette
@@ -271,7 +314,7 @@ impl Palette {
             fg_muted: hex(0x69, 0x69, 0x60),
             fg_faint: hex(0x8C, 0x8B, 0x82),
             primary: hex(0xB3, 0x50, 0x17),
-            on_primary: hex(0xFF, 0xFF, 0xFF),
+            on_primary: hex(0xFD, 0xFC, 0xFA),
             primary_text: hex(0x93, 0x41, 0x13),
             red: hex(0xB7, 0x49, 0x3F),
             error_text: hex(0xA0, 0x40, 0x37),
@@ -284,13 +327,13 @@ impl Palette {
             selection: Color32::from_rgba_unmultiplied(0xA9, 0x99, 0x8F, 0x2B),
             shadow: Color32::from_black_alpha(28),
             subtle: hex(0xF7, 0xF6, 0xF4),
-            overlay: Color32::from_rgba_unmultiplied(0x39, 0x39, 0x34, 0x20),
+            overlay: Color32::from_rgba_unmultiplied(0x39, 0x39, 0x34, 0x47),
             border_hover: hex(0xCB, 0xC7, 0xC2),
             border_focus: hex(0xB3, 0x50, 0x17),
-            focus_ring: Color32::from_rgba_unmultiplied(0xB3, 0x50, 0x17, 0x55),
+            focus_ring: Color32::from_rgba_unmultiplied(0xB3, 0x50, 0x17, 0x59),
             selection_fg: hex(0x44, 0x44, 0x3D),
-            disabled: Color32::from_rgba_unmultiplied(0x44, 0x44, 0x3D, 0x80),
-            body: Color32::from_rgba_unmultiplied(0x44, 0x44, 0x3D, 0xE6),
+            disabled: Color32::from_rgba_unmultiplied(0x44, 0x44, 0x3D, 0x73),
+            body: hex(0x57, 0x57, 0x4F),
             primary_hover: hex(0x9A, 0x43, 0x10),
             primary_active: hex(0x85, 0x39, 0x0C),
             markdown_link: hex(0x2D, 0x7D, 0x8C),
@@ -306,7 +349,7 @@ impl Palette {
             scrollbar: Color32::from_rgba_unmultiplied(0x40, 0x2E, 0x25, 0x2E),
             scrollbar_hover: Color32::from_rgba_unmultiplied(0x40, 0x2E, 0x25, 0x5C),
             info_text: hex(0x27, 0x61, 0xA7),
-            success_text: hex(0x49, 0x6A, 0x2F),
+            success_text: hex(0x51, 0x77, 0x34),
             warning_text: hex(0x78, 0x5C, 0x12),
             status_error_text: hex(0xAE, 0x46, 0x3C),
             status_warning_text: hex(0x82, 0x64, 0x13),
@@ -314,13 +357,28 @@ impl Palette {
             status_info_text: hex(0x2A, 0x68, 0xB4),
             diff_added: hex(0x2C, 0x75, 0x1E),
             diff_removed: hex(0xAB, 0x59, 0x59),
-            diff_modified: hex(0x2C, 0x75, 0x1E),
+            diff_modified: hex(0x2D, 0x7D, 0x8C),
             tool_border: Color32::from_rgba_unmultiplied(0xD8, 0xD5, 0xD0, 0x73),
             tool_icon: hex(0x69, 0x69, 0x60),
             tool_title: hex(0x44, 0x44, 0x3D),
             tool_description: hex(0x69, 0x69, 0x60),
             chat_divider: hex(0xD8, 0xD5, 0xD0),
             elevation_ring: Color32::from_rgba_unmultiplied(0, 0, 0, 36),
+            accent_soft: Color32::from_rgba_unmultiplied(0xB3, 0x50, 0x17, 28),
+            accent_border: Color32::from_rgba_unmultiplied(0xB3, 0x50, 0x17, 82),
+            warning_soft: Color32::from_rgba_unmultiplied(0x88, 0x69, 0x14, 31),
+            warning_border: Color32::from_rgba_unmultiplied(0x88, 0x69, 0x14, 77),
+            error_soft: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 26),
+            error_border: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 71),
+            success_soft: Color32::from_rgba_unmultiplied(0x51, 0x77, 0x34, 28),
+            success_border: Color32::from_rgba_unmultiplied(0x51, 0x77, 0x34, 71),
+            info_soft: Color32::from_rgba_unmultiplied(0x2C, 0x6E, 0xBD, 26),
+            info_border: Color32::from_rgba_unmultiplied(0x2C, 0x6E, 0xBD, 71),
+            tag_bg: Color32::from_rgba_unmultiplied(0x44, 0x44, 0x3D, 15),
+            diff_added_bg: Color32::from_rgba_unmultiplied(0x51, 0x77, 0x34, 26),
+            diff_added_emph: Color32::from_rgba_unmultiplied(0x51, 0x77, 0x34, 56),
+            diff_removed_bg: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 26),
+            diff_removed_emph: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 56),
         };
         palette.border_soft = palette.edge_muted();
         palette
@@ -415,6 +473,21 @@ impl Palette {
             tool_description: ink.tool_description,
             chat_divider: blend(self.chat_divider, other.chat_divider),
             elevation_ring: blend(self.elevation_ring, other.elevation_ring),
+            accent_soft: blend(self.accent_soft, other.accent_soft),
+            accent_border: blend(self.accent_border, other.accent_border),
+            warning_soft: blend(self.warning_soft, other.warning_soft),
+            warning_border: blend(self.warning_border, other.warning_border),
+            error_soft: blend(self.error_soft, other.error_soft),
+            error_border: blend(self.error_border, other.error_border),
+            success_soft: blend(self.success_soft, other.success_soft),
+            success_border: blend(self.success_border, other.success_border),
+            info_soft: blend(self.info_soft, other.info_soft),
+            info_border: blend(self.info_border, other.info_border),
+            tag_bg: blend(self.tag_bg, other.tag_bg),
+            diff_added_bg: blend(self.diff_added_bg, other.diff_added_bg),
+            diff_added_emph: blend(self.diff_added_emph, other.diff_added_emph),
+            diff_removed_bg: blend(self.diff_removed_bg, other.diff_removed_bg),
+            diff_removed_emph: blend(self.diff_removed_emph, other.diff_removed_emph),
         };
         palette.fg = readable_ink(palette.fg, palette.bg, INK_CONTRAST + 0.1);
         palette.body = readable_ink(palette.body, palette.bg, INK_CONTRAST);
@@ -447,6 +520,9 @@ impl Palette {
         let selection_surface = palette.over(palette.bg, palette.selection);
         palette.selection_fg = readable_ink(palette.selection_fg, selection_surface, INK_CONTRAST);
         palette.on_primary = readable_ink(palette.on_primary, palette.primary, INK_CONTRAST);
+        palette.diff_added = readable_ink(palette.diff_added, palette.bg, INK_CONTRAST);
+        palette.diff_removed = readable_ink(palette.diff_removed, palette.bg, INK_CONTRAST);
+        palette.diff_modified = readable_ink(palette.diff_modified, palette.bg, INK_CONTRAST);
         palette
     }
 
@@ -513,6 +589,10 @@ impl Palette {
         self.primary_hover = self.mix(accent, target, 0.12);
         self.primary_active = self.mix(accent, target, 0.22);
         self.primary_text = self.readable_text(accent);
+        self.border_focus = accent;
+        self.focus_ring = self.fade(accent, if self.dark { 0.40 } else { 0.35 });
+        self.accent_soft = self.fade(accent, if self.dark { 0.15 } else { 0.11 });
+        self.accent_border = self.fade(accent, if self.dark { 0.38 } else { 0.32 });
         self
     }
 
@@ -656,7 +736,7 @@ impl Palette {
     }
 
     pub fn scrim(&self) -> Color32 {
-        self.fade(self.overlay, 0.6)
+        self.overlay
     }
 
     pub fn field_fill(&self) -> Color32 {
@@ -1065,7 +1145,7 @@ fn visuals(p: &Palette) -> Visuals {
         color: Color32::from_black_alpha(if p.dark { 120 } else { 56 }),
     };
 
-    let corner = CornerRadius::same(radius::XL);
+    let corner = CornerRadius::same(radius::BUTTON);
     visuals.widgets.noninteractive.bg_fill = p.bg;
     visuals.widgets.noninteractive.weak_bg_fill = p.bg;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.edge_muted());
@@ -1156,6 +1236,10 @@ pub fn font_micro_medium() -> FontId {
     font_medium(TEXT_MICRO)
 }
 
+pub fn font_tag() -> FontId {
+    font_mono(TEXT_TAG)
+}
+
 pub fn font_code() -> FontId {
     font_mono(TEXT_CODE)
 }
@@ -1207,12 +1291,6 @@ pub fn card_frame(p: &Palette) -> egui::Frame {
         .fill(p.card)
         .stroke(Stroke::new(HAIRLINE, p.elevation_ring))
         .corner_radius(radius::XL)
-        .shadow(egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 4,
-            spread: 0,
-            color: Color32::from_black_alpha(if p.dark { 76 } else { 10 }),
-        })
         .inner_margin(Margin::same(12))
 }
 
@@ -1221,12 +1299,6 @@ pub fn panel_card_frame(p: &Palette) -> egui::Frame {
         .fill(p.bg)
         .stroke(Stroke::new(HAIRLINE, p.elevation_ring))
         .corner_radius(radius::PANEL)
-        .shadow(egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 4,
-            spread: 0,
-            color: Color32::from_black_alpha(if p.dark { 76 } else { 10 }),
-        })
 }
 
 pub fn popover_frame(p: &Palette) -> egui::Frame {
@@ -1370,6 +1442,81 @@ mod tests {
     }
 
     #[test]
+    fn dense_app_scale_matches_the_tokens_doc() {
+        assert_eq!(TEXT_PAGE_TITLE, 17.0);
+        assert_eq!(TEXT_UI_SECTION, 15.0);
+        assert_eq!(TEXT_UI_HEADER, 14.0);
+        assert_eq!(TEXT_UI_LABEL, 13.5);
+        assert_eq!(TEXT_BUTTON, 12.5);
+        assert_eq!(TEXT_CODE_HEADER, 13.0);
+        assert_eq!(TEXT_META, 12.5);
+        assert_eq!(TEXT_CODE, 12.0);
+        assert_eq!(TEXT_TAG, 11.0);
+        assert_eq!(LINE_USER, 26.0);
+        assert_eq!(LINE_LABEL, 20.0);
+        assert_eq!(LINE_META, 18.0);
+        assert_eq!(LINE_TAG, 17.0);
+        assert_eq!(LINE_CODE_ROW, 22.0);
+        assert_eq!(BUTTON_HEIGHT, 26.0);
+        assert_eq!(ICON_BUTTON, 24.0);
+        assert_eq!(SPACE_1, 4.0);
+        assert_eq!(SPACE_2, 8.0);
+        assert_eq!(SPACE_3, 12.0);
+        assert_eq!(SPACE_4, 16.0);
+        assert_eq!(SPACE_5, 20.0);
+        assert_eq!(SPACE_6, 24.0);
+        assert_eq!(SPACE_8, 32.0);
+        assert_eq!(radius::TAG, 6);
+        assert_eq!(radius::DEMO, 7);
+        assert_eq!(radius::MENU_ITEM, 8);
+        assert_eq!(radius::BUTTON, 9);
+        assert_eq!(radius::PANEL, 10);
+    }
+
+    #[test]
+    fn diff_and_action_pairs_match_the_reference() {
+        let light = Palette::light();
+        let dark = Palette::dark();
+        assert_eq!(light.on_primary, Color32::from_rgb(0xFD, 0xFC, 0xFA));
+        assert_eq!(dark.on_primary, Color32::from_rgb(0x12, 0x0F, 0x0E));
+        assert_eq!(light.diff_added, Color32::from_rgb(0x2C, 0x75, 0x1E));
+        assert_eq!(dark.diff_added, Color32::from_rgb(0x76, 0xAD, 0x4F));
+        assert_eq!(light.diff_removed, Color32::from_rgb(0xAB, 0x59, 0x59));
+        assert_eq!(dark.diff_removed, Color32::from_rgb(0xE1, 0x77, 0x68));
+        assert_eq!(light.diff_modified, Color32::from_rgb(0x2D, 0x7D, 0x8C));
+        assert_eq!(dark.diff_modified, Color32::from_rgb(0x5D, 0x99, 0xA9));
+        assert_eq!(light.error_text, Color32::from_rgb(0xA0, 0x40, 0x37));
+        assert_eq!(dark.error_text, Color32::from_rgb(0xE1, 0x77, 0x68));
+        assert_eq!(light.tag_bg.a(), 15);
+        assert_eq!(dark.tag_bg.a(), 18);
+        for p in [&light, &dark] {
+            for (name, ink) in [
+                ("diff_added", p.diff_added),
+                ("diff_removed", p.diff_removed),
+                ("diff_modified", p.diff_modified),
+            ] {
+                for ground in [p.bg, p.code_bg] {
+                    let ratio = contrast_ratio(ink, ground);
+                    assert!(
+                        ratio >= INK_CONTRAST,
+                        "{name} on {ground:?} scores {ratio:.2}:1"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scrim_uses_the_overlay_alpha() {
+        let light = Palette::light();
+        let dark = Palette::dark();
+        assert_eq!(light.scrim(), light.overlay);
+        assert_eq!(dark.scrim(), dark.overlay);
+        assert_eq!(light.overlay.a(), 0x47);
+        assert_eq!(dark.overlay.a(), 0x9E);
+    }
+
+    #[test]
     fn derived_status_text_is_readable() {
         let light = Palette::light();
         let dark = Palette::dark();
@@ -1494,6 +1641,95 @@ mod tests {
                     ratio >= 4.5,
                     "selected text on {fill:?} scores {ratio:.2}:1"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn reading_pairs_meet_wcag_aa_on_every_ground() {
+        for p in [Palette::light(), Palette::dark()] {
+            let grounds = [p.bg, p.card, p.subtle, p.code_bg];
+            let inks = [
+                ("fg", p.fg),
+                ("body", p.body),
+                ("fg_muted", p.fg_muted),
+                ("primary_text", p.primary_text),
+                ("error_text", p.error_text),
+                ("warning_text", p.warning_text),
+                ("info_text", p.info_text),
+                ("status_error_text", p.status_error_text),
+                ("status_warning_text", p.status_warning_text),
+                ("status_success_text", p.status_success_text),
+                ("status_info_text", p.status_info_text),
+            ];
+            for ground in grounds {
+                for (name, ink) in inks {
+                    let ratio = contrast_ratio(ink, ground);
+                    assert!(
+                        ratio >= INK_CONTRAST,
+                        "{name} on {ground:?} scores {ratio:.2}:1 in {} mode",
+                        if p.dark { "dark" } else { "light" }
+                    );
+                }
+            }
+            let on_primary = contrast_ratio(p.on_primary, p.primary);
+            assert!(
+                on_primary >= INK_CONTRAST,
+                "on_primary scores {on_primary:.2}:1 in {} mode",
+                if p.dark { "dark" } else { "light" }
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_soft_tokens_are_paired() {
+        for p in [Palette::light(), Palette::dark()] {
+            for (name, color) in [
+                ("accent_soft", p.accent_soft),
+                ("accent_border", p.accent_border),
+                ("warning_soft", p.warning_soft),
+                ("warning_border", p.warning_border),
+                ("error_soft", p.error_soft),
+                ("error_border", p.error_border),
+                ("success_soft", p.success_soft),
+                ("success_border", p.success_border),
+                ("info_soft", p.info_soft),
+                ("info_border", p.info_border),
+                ("tag_bg", p.tag_bg),
+                ("diff_added_bg", p.diff_added_bg),
+                ("diff_added_emph", p.diff_added_emph),
+                ("diff_removed_bg", p.diff_removed_bg),
+                ("diff_removed_emph", p.diff_removed_emph),
+            ] {
+                assert!(color.a() > 0, "{name} is transparent");
+            }
+            assert!(p.accent_border.a() > p.accent_soft.a());
+            assert!(p.diff_added_emph.a() > p.diff_added_bg.a());
+            assert!(p.diff_removed_emph.a() > p.diff_removed_bg.a());
+        }
+    }
+
+    #[test]
+    fn primary_action_pairs_accent_with_on_primary_text() {
+        for p in [Palette::light(), Palette::dark()] {
+            assert!(contrast_ratio(p.on_primary, p.primary) >= INK_CONTRAST);
+            assert!(contrast_ratio(p.on_primary, p.primary_hover) >= INK_CONTRAST - 0.25);
+            assert!(contrast_ratio(p.on_primary, p.primary_active) >= INK_CONTRAST - 0.25);
+        }
+    }
+
+    #[test]
+    fn accent_override_repaints_focus_and_soft_tokens() {
+        let accent = Color32::from_rgb(0xDA, 0x7C, 0x47);
+        for p in [Palette::light(), Palette::dark()] {
+            let p = p.with_accent(accent);
+            assert_eq!(p.primary, accent);
+            assert_eq!(p.border_focus, accent);
+            for token in [p.accent_soft, p.accent_border, p.focus_ring] {
+                let [r, g, b, _] = token.to_srgba_unmultiplied();
+                assert!(r.abs_diff(accent.r()) <= 4);
+                assert!(g.abs_diff(accent.g()) <= 4);
+                assert!(b.abs_diff(accent.b()) <= 4);
             }
         }
     }

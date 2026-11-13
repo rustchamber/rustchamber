@@ -1500,6 +1500,10 @@ struct ToolbarFlags {
     wrap: bool,
     stats: bool,
     status: bool,
+    mode: bool,
+    export: bool,
+    save: bool,
+    revert: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1614,29 +1618,66 @@ fn toolbar(
     let status_width = if ready { STATUS_SLOT } else { 0.0 };
 
     let available = content.available_width();
-    let fixed = 4.0 * (surfaces::PANEL_ACTION + 4.0)
-        + mode_width
-        + save_width
-        + export_width
-        + if dirty { revert_width } else { 0.0 };
-    let mut extra = 0.0;
-    let mut budget = (available - fixed - 120.0).max(0.0);
-    let mut flags = ToolbarFlags::default();
+    let actions_width = 4.0 * (surfaces::PANEL_ACTION + 4.0);
+    let mut plan = ToolbarFlags {
+        wrap: false,
+        stats: false,
+        status: false,
+        mode: markdown,
+        export: csv,
+        save: ready && !read_only,
+        revert: ready && !read_only && dirty,
+    };
+    let mut right_width = actions_width;
+    if plan.mode {
+        right_width += mode_width;
+    }
+    if plan.export {
+        right_width += export_width;
+    }
+    if plan.save {
+        right_width += save_width;
+    }
+    if plan.revert {
+        right_width += revert_width;
+    }
+
+    let mut budget = available - 120.0 - right_width;
+    if budget < 0.0 && plan.export {
+        plan.export = false;
+        right_width -= export_width;
+        budget += export_width;
+    }
+    if budget < 0.0 && plan.revert {
+        plan.revert = false;
+        right_width -= revert_width;
+        budget += revert_width;
+    }
+    if budget < 0.0 && plan.mode {
+        plan.mode = false;
+        right_width -= mode_width;
+        budget += mode_width;
+    }
+    if budget < 0.0 && plan.save {
+        plan.save = false;
+        right_width -= save_width;
+        budget += save_width;
+    }
     if wrap_width > 0.0 && budget >= wrap_width {
-        flags.wrap = true;
+        plan.wrap = true;
+        right_width += wrap_width;
         budget -= wrap_width;
-        extra += wrap_width;
     }
     if status_width > 0.0 && budget >= status_width {
-        flags.status = true;
+        plan.status = true;
+        right_width += status_width;
         budget -= status_width;
-        extra += status_width;
     }
     if ready && budget >= stats_width + 8.0 {
-        flags.stats = true;
-        extra += stats_width + 8.0;
+        plan.stats = true;
+        right_width += stats_width + 8.0;
     }
-    let left = (available - fixed - extra).max(60.0);
+    let left = (available - right_width - 8.0).clamp(60.0, available.max(60.0));
 
     let (path_rect, path_response) =
         content.allocate_exact_size(Vec2::new(left, TOOLBAR_HEIGHT), Sense::hover());
@@ -1697,10 +1738,10 @@ fn toolbar(
                     .insert_temp(Id::unique("files-find-open"), !open)
             });
         }
-        if markdown && let Some(mode) = mode_toggle(ui, p, preview) {
+        if plan.mode && let Some(mode) = mode_toggle(ui, p, preview) {
             set_preview_mode(ctx, active, mode);
         }
-        if export_width > 0.0
+        if plan.export
             && toolbar_chip(
                 ui,
                 p,
@@ -1714,12 +1755,12 @@ fn toolbar(
         {
             result.export = true;
         }
-        if flags.wrap
+        if plan.wrap
             && toolbar_chip(ui, p, "Wrap", buffer.wrap, false, true, "Toggle word wrap").clicked()
         {
             buffer.wrap = !buffer.wrap;
         }
-        if save_width > 0.0
+        if plan.save
             && toolbar_chip(
                 ui,
                 p,
@@ -1734,19 +1775,19 @@ fn toolbar(
             result.save = true;
         }
         if dirty
-            && revert_width > 0.0
+            && plan.revert
             && toolbar_chip(ui, p, "Revert", false, false, true, "Discard changes").clicked()
         {
             result.revert = true;
         }
-        if flags.stats {
+        if plan.stats {
             ui.label(
                 RichText::new(stats)
                     .font(theme::font(12.0))
                     .color(p.fg_muted),
             );
         }
-        if flags.status {
+        if plan.status {
             status_slot(ui, p, slot, buffer.error.as_deref(), saved);
         }
     });
@@ -1780,11 +1821,28 @@ fn toolbar_chip(
     tip: &str,
 ) -> Response {
     let font = theme::font_medium(12.0);
-    let galley = ui
+    let measured = ui
         .painter()
         .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
+    let width = (measured.size().x + 18.0).min(ui.available_width().max(44.0));
+    let text_room = (width - 18.0).max(0.0);
+    let galley = if measured.size().x > text_room {
+        egui::WidgetText::from(
+            RichText::new(label)
+                .font(font.clone())
+                .color(Color32::PLACEHOLDER),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            text_room,
+            egui::TextStyle::Button,
+        )
+    } else {
+        measured
+    };
     let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(galley.size().x + 18.0, 22.0),
+        Vec2::new(width, 22.0),
         if enabled {
             Sense::click()
         } else {
@@ -1820,8 +1878,14 @@ fn toolbar_chip(
     } else {
         p.fg_muted
     };
-    ui.painter()
-        .text(rect.center(), Align2::CENTER_CENTER, label, font, color);
+    ui.painter().galley(
+        Pos2::new(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        color,
+    );
     response.on_hover_text(tip)
 }
 
@@ -2821,25 +2885,13 @@ fn display_line(line: &str) -> String {
 }
 
 fn file_visual(name: &str, p: &Palette) -> (Icon, Color32) {
-    match extension(name).as_str() {
-        "rs" => (Icon::File, p.coral),
-        "ts" | "tsx" => (Icon::File, p.blue),
-        "js" | "jsx" | "mjs" | "cjs" => (Icon::File, p.primary),
-        "json" | "jsonc" | "json5" => (Icon::File, p.primary),
-        "md" | "mdx" | "txt" | "rst" => (Icon::File, p.blue),
-        "css" | "scss" | "sass" | "less" => (Icon::File, p.purple),
-        "html" | "htm" | "xml" => (Icon::File, p.coral),
-        "svg" => (Icon::File, p.green),
-        "toml" | "yaml" | "yml" | "ini" | "conf" | "env" => (Icon::File, p.purple),
-        "sh" | "bash" | "zsh" | "fish" => (Icon::Terminal, p.green),
-        "lock" => (Icon::File, p.fg_muted),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" => (Icon::Layers, p.green),
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" => {
-            (Icon::Archive, p.coral)
-        }
-        "pdf" => (Icon::File, p.red),
-        _ => (Icon::File, p.fg_muted),
-    }
+    let icon = match extension(name).as_str() {
+        "sh" | "bash" | "zsh" | "fish" => Icon::Terminal,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" => Icon::Layers,
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Icon::Archive,
+        _ => Icon::File,
+    };
+    (icon, p.fg_muted)
 }
 
 fn binary_extension(path: &str) -> bool {

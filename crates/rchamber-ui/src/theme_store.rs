@@ -589,6 +589,21 @@ fn build_palette(theme: &ThemeDoc) -> Palette {
         tool_description: pick(&c.tools.description, base.tool_description),
         chat_divider: pick(&c.chat.divider, hr),
         elevation_ring: base.elevation_ring,
+        accent_soft: theme::fade(primary, if dark { 0.15 } else { 0.11 }),
+        accent_border: theme::fade(primary, if dark { 0.38 } else { 0.32 }),
+        warning_soft: theme::fade(coral, if dark { 0.15 } else { 0.12 }),
+        warning_border: theme::fade(coral, if dark { 0.34 } else { 0.30 }),
+        error_soft: theme::fade(red, if dark { 0.15 } else { 0.10 }),
+        error_border: theme::fade(red, if dark { 0.34 } else { 0.28 }),
+        success_soft: theme::fade(green, if dark { 0.14 } else { 0.11 }),
+        success_border: theme::fade(green, if dark { 0.32 } else { 0.28 }),
+        info_soft: theme::fade(blue, if dark { 0.14 } else { 0.10 }),
+        info_border: theme::fade(blue, if dark { 0.34 } else { 0.28 }),
+        tag_bg: theme::fade(fg, if dark { 0.07 } else { 0.06 }),
+        diff_added_bg: theme::fade(diff_added, if dark { 0.14 } else { 0.10 }),
+        diff_added_emph: theme::fade(diff_added, if dark { 0.28 } else { 0.22 }),
+        diff_removed_bg: theme::fade(diff_removed, if dark { 0.15 } else { 0.10 }),
+        diff_removed_emph: theme::fade(diff_removed, if dark { 0.30 } else { 0.22 }),
     }
 }
 

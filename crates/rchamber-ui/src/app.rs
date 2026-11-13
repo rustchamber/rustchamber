@@ -29,8 +29,8 @@ use crate::widgets;
 #[path = "header.rs"]
 pub mod header;
 
-const SIDEBAR_MIN: f32 = 264.0;
-const SIDEBAR_MAX: f32 = 500.0;
+const SIDEBAR_MIN: f32 = 248.0;
+const SIDEBAR_MAX: f32 = 420.0;
 const RAIL_WIDTH: f32 = 44.0;
 pub(crate) const ZONE_MIN: f32 = 320.0;
 const CHAT_MIN: f32 = 320.0;
@@ -40,7 +40,6 @@ const ZONE_HANDLE: f32 = 8.0;
 const BOTTOM_HANDLE: f32 = 8.0;
 const DROP_TARGET_HEIGHT: f32 = 88.0;
 const RESIZE_HANDLE: f32 = 3.0;
-const CARD_RADIUS: u8 = 10;
 const TOAST_WIDTH: f32 = 356.0;
 const TOAST_INSET: f32 = 24.0;
 const TOAST_PAD_X: i8 = 14;
@@ -287,14 +286,7 @@ fn expanded_bottom_height(body_height: f32) -> f32 {
     body_height.max(0.0)
 }
 
-fn card_ring(p: &Palette) -> Color32 {
-    if p.dark {
-        p.alpha(Color32::WHITE, 20)
-    } else {
-        p.alpha(Color32::BLACK, 36)
-    }
-}
-
+#[cfg(test)]
 fn zone_card_fill(p: &Palette) -> Color32 {
     if p.dark {
         p.bg_soft
@@ -338,6 +330,7 @@ pub struct UiState {
     pub home_project_menu: bool,
     pub home_project_query: String,
     pub home_allow_all: bool,
+    pub home_session: bool,
     pub focus_home_composer: bool,
     pub settings_endpoint: String,
     pub settings_password: String,
@@ -650,6 +643,7 @@ impl RustChamber {
             return;
         }
         self.save_home_draft();
+        self.ui.home_session = false;
         let idle = self
             .model
             .sessions
@@ -712,6 +706,7 @@ impl RustChamber {
             })
             .unwrap_or_else(|| CHATS_TARGET.to_string());
         self.model.clear_active();
+        self.ui.home_session = true;
         self.ui.home_project = Some(target);
         self.ui.home_draft = self
             .ui
@@ -1081,6 +1076,7 @@ impl RustChamber {
             self.ui.search_open = true;
             self.ui.focus_search = true;
         }
+        self.project_number_shortcut(ctx);
         if keymap.matches(ctx, Command::ModelMenu) {
             self.ui.model_menu = true;
         }
@@ -1140,6 +1136,40 @@ impl RustChamber {
             if !dismissed {
                 self.ui.expanded = false;
             }
+        }
+    }
+
+    fn project_number_shortcut(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        const DIGITS: [egui::Key; 9] = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ];
+        let slot = ctx.input(|input| {
+            if !input.modifiers.command || input.modifiers.shift || input.modifiers.alt {
+                return None;
+            }
+            DIGITS.iter().position(|key| input.key_pressed(*key))
+        });
+        let Some(slot) = slot else {
+            return;
+        };
+        let id = self
+            .model
+            .workspace_projects()
+            .get(slot)
+            .map(|project| project.id.clone());
+        if let Some(id) = id {
+            self.select_project(&id);
         }
     }
 
@@ -1421,8 +1451,7 @@ fn panel_drop_overlay(ctx: &egui::Context, p: &Palette, drag: &TabDrag, target: 
         .interactable(false)
         .show(ctx, |ui| {
             let screen = ui.ctx().content_rect();
-            ui.painter()
-                .rect_filled(screen, 0.0, p.alpha(p.overlay, 102));
+            ui.painter().rect_filled(screen, 0.0, p.scrim());
             let t = motion::hover_fade(ui, Id::unique("panel-drop-hover"), hovered);
             let radius = CornerRadius::same(theme::radius::PANEL);
             ui.painter().rect_filled(target, radius, p.alpha(p.bg, 236));
@@ -1554,7 +1583,6 @@ impl eframe::App for RustChamber {
             ctx.request_repaint_after(Duration::from_millis(90));
         }
 
-        let p = self.palette.clone();
         let has_workspace = self
             .model
             .workspace
@@ -1668,8 +1696,7 @@ impl eframe::App for RustChamber {
             );
         }
 
-        let card_fill = zone_card_fill(&p);
-        let ring = card_ring(&p);
+        let p = self.palette.clone();
 
         if layout.sidebar > 0.01 {
             egui::Panel::left("sidebar")
@@ -1696,8 +1723,8 @@ impl eframe::App for RustChamber {
             .exact_size(header::HEADER_HEIGHT)
             .show_separator_line(false)
             .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
-                left: 12,
-                right: 10,
+                left: 16,
+                right: 12,
                 top: 0,
                 bottom: 0,
             }))
@@ -1706,11 +1733,11 @@ impl eframe::App for RustChamber {
             });
 
         if layout.rail > 0.0 {
-            egui::Panel::right("context-rail")
+            egui::Panel::right("activity-rail")
                 .resizable(false)
                 .exact_size(layout.rail)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(p.bg))
+                .frame(egui::Frame::new().fill(p.bg_soft))
                 .show(root, |ui| {
                     rail::show(ui, self);
                 });
@@ -1721,18 +1748,13 @@ impl eframe::App for RustChamber {
                 .resizable(false)
                 .exact_size(layout.zone)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
-                    left: 8,
-                    right: 6,
-                    top: 0,
-                    bottom: 8,
-                }))
+                .frame(egui::Frame::new().fill(p.bg))
                 .show(root, |ui| {
                     let card = ui.max_rect();
-                    ui.painter().rect_filled(
-                        card,
-                        CornerRadius::same(CARD_RADIUS),
-                        fade(card_fill, zone_exposure),
+                    ui.painter().vline(
+                        card.left(),
+                        card.y_range(),
+                        Stroke::new(theme::BORDER, fade(p.border, zone_exposure)),
                     );
                     ui.set_opacity(zone_exposure);
                     if self.ui.zone == PanelZone::Right {
@@ -1747,12 +1769,6 @@ impl eframe::App for RustChamber {
                             Surface::Extension => crate::extension_panel::show(ui, self),
                         }
                     }
-                    ui.painter().rect_stroke(
-                        card,
-                        CornerRadius::same(CARD_RADIUS),
-                        Stroke::new(0.5, fade(ring, zone_exposure)),
-                        egui::StrokeKind::Inside,
-                    );
                 });
         }
 
@@ -1764,18 +1780,13 @@ impl eframe::App for RustChamber {
                         .resizable(false)
                         .exact_size(bottom)
                         .show_separator_line(false)
-                        .frame(egui::Frame::new().inner_margin(Margin {
-                            left: 8,
-                            right: 6,
-                            top: 8,
-                            bottom: 8,
-                        }))
+                        .frame(egui::Frame::new().fill(p.bg))
                         .show(ui, |ui| {
                             let card = ui.max_rect();
-                            ui.painter().rect_filled(
-                                card,
-                                CornerRadius::same(CARD_RADIUS),
-                                fade(card_fill, bottom_exposure),
+                            ui.painter().hline(
+                                card.x_range(),
+                                card.top(),
+                                Stroke::new(theme::BORDER, fade(p.border, bottom_exposure)),
                             );
                             ui.set_opacity(bottom_exposure);
                             if self.ui.zone == PanelZone::Bottom {
@@ -1790,12 +1801,6 @@ impl eframe::App for RustChamber {
                                     Surface::Extension => crate::extension_panel::show(ui, self),
                                 }
                             }
-                            ui.painter().rect_stroke(
-                                card,
-                                CornerRadius::same(CARD_RADIUS),
-                                Stroke::new(0.5, fade(ring, bottom_exposure)),
-                                egui::StrokeKind::Inside,
-                            );
                         });
                 }
                 let remaining = ui.available_rect_before_wrap();
@@ -2073,7 +2078,10 @@ mod tests {
         let dark = Palette::dark();
         assert_eq!(zone_card_fill(&dark), dark.bg_soft);
         let light = Palette::light();
-        assert_eq!(zone_card_fill(&light), Color32::from_rgb(0xFA, 0xF9, 0xF7));
+        assert_eq!(
+            zone_card_fill(&light),
+            light.mix(light.bg_soft, light.bg, 0.5)
+        );
     }
 
     #[test]
@@ -2170,7 +2178,7 @@ mod tests {
         assert_eq!(back.zone_width, 512.0);
         assert_eq!(back.bottom_height, 260.0);
         let defaults: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(defaults.zone_width, 640.0);
-        assert_eq!(defaults.bottom_height, 320.0);
+        assert_eq!(defaults.zone_width, 340.0);
+        assert_eq!(defaults.bottom_height, 210.0);
     }
 }

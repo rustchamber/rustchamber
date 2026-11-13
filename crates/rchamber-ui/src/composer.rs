@@ -17,31 +17,34 @@ use crate::motion;
 use crate::theme::{self, Palette};
 use crate::widgets;
 
-const COLUMN_WIDTH: f32 = 768.0;
+const COLUMN_WIDTH: f32 = 760.0;
 const COLUMN_PAD_MIN: f32 = 12.0;
 const COLUMN_PAD_MAX: f32 = 16.0;
-const BOX_RADIUS: u8 = 12;
+const BOX_RADIUS: u8 = 10;
 pub(crate) const FORM_PAD_BOTTOM: f32 = 16.0;
 
-const EDITOR_MIN_HEIGHT: f32 = 64.0;
-const EDITOR_PAD_X: f32 = 16.0;
-const EDITOR_PAD_TOP: f32 = 16.0;
-const EDITOR_PAD_BOTTOM: f32 = 10.0;
-const EDITOR_LINE_HEIGHT: f32 = 20.0;
+const EDITOR_MIN_HEIGHT: f32 = 40.0;
+const EDITOR_PAD_X: f32 = 12.0;
+const EDITOR_PAD_TOP: f32 = 9.0;
+const EDITOR_PAD_BOTTOM: f32 = 9.0;
+const EDITOR_LINE_HEIGHT: f32 = 22.0;
 const EDITOR_MAX_LINES: f32 = 8.0;
 const EDITOR_MAX_HEIGHT: f32 =
     EDITOR_MAX_LINES * EDITOR_LINE_HEIGHT + EDITOR_PAD_TOP + EDITOR_PAD_BOTTOM;
-const EDITOR_FONT: f32 = 13.5;
+const EDITOR_FONT: f32 = 14.0;
 
-const FOOTER_PAD_X: f32 = 10.0;
-const FOOTER_PAD_Y: f32 = 6.0;
+const FOOTER_PAD_X: f32 = 12.0;
+const FOOTER_PAD_END: f32 = 8.0;
+const FOOTER_PAD_Y: f32 = 3.0;
 const FOOTER_BUTTON: f32 = 24.0;
-const FOOTER_GLYPH: f32 = 16.0;
 const FOOTER_SEND_GLYPH: f32 = 16.0;
-const FOOTER_STOP_GLYPH: f32 = 20.0;
 const FOOTER_GAP: f32 = 6.0;
-const FOOTER_GROUP_GAP: f32 = 12.0;
-const FOOTER_HEIGHT: f32 = FOOTER_BUTTON + FOOTER_PAD_Y * 2.0;
+const FOOTER_GROUP_GAP: f32 = 10.0;
+const SEND_HEIGHT: f32 = theme::BUTTON_HEIGHT;
+const FOOTER_HEIGHT: f32 = SEND_HEIGHT + FOOTER_PAD_Y * 2.0;
+const FOOTER_CHIP: f32 = 22.0;
+const SHIELD_RESERVE: f32 = 142.0;
+const SEND_RESERVE: f32 = 96.0;
 const LABEL_MAX_WIDTH: f32 = 220.0;
 const FLIP_LABEL_CAP: f32 = 96.0;
 const THINK_LABEL_CAP: f32 = 96.0;
@@ -62,17 +65,17 @@ const MODEL_ROW_TRAILING: f32 = MODEL_ROW_PAD
     + MODEL_ROW_SLOT_GAP
     + 6.0;
 
-const QUEUE_ROW: f32 = 32.0;
+const QUEUE_ROW: f32 = 26.0;
 const QUEUE_LIST_MAX: f32 = 160.0;
 const QUEUE_ROW_INSET_START: f32 = 12.0;
-const QUEUE_ROW_INSET_END: f32 = 6.0;
+const QUEUE_ROW_INSET_END: f32 = 8.0;
 
-const ATTACHMENT_HEIGHT: f32 = 28.0;
+const ATTACHMENT_HEIGHT: f32 = 22.0;
 const ATTACHMENT_NAME_MAX: f32 = 200.0;
-const ATTACHMENT_ICON: f32 = 16.0;
-const ATTACHMENT_REMOVE: f32 = 20.0;
-const ATTACHMENT_GAP: f32 = 8.0;
-const ATTACHMENT_ROW_TOP: f32 = 4.0;
+const ATTACHMENT_ICON: f32 = 12.0;
+const ATTACHMENT_REMOVE: f32 = 18.0;
+const ATTACHMENT_GAP: f32 = 6.0;
+const ATTACHMENT_ROW_TOP: f32 = 8.0;
 
 const DOCK_GAP: f32 = 12.0;
 
@@ -257,13 +260,12 @@ pub fn reserved_height(ctx: &egui::Context, key: &str, home: bool) -> f32 {
 }
 
 fn composer_width(bounds_width: f32) -> f32 {
-    let column = bounds_width.min(COLUMN_WIDTH);
     let pad = if bounds_width >= 1024.0 {
         (bounds_width * 0.03).clamp(16.0, 24.0)
     } else {
         (bounds_width * 0.025).clamp(COLUMN_PAD_MIN, COLUMN_PAD_MAX)
     };
-    (column - pad * 2.0).max(240.0)
+    (bounds_width - pad * 2.0).min(COLUMN_WIDTH).max(240.0)
 }
 
 fn queue_strip_height(app: &RustChamber, ctx: &egui::Context, key: &str, home: bool) -> f32 {
@@ -738,11 +740,23 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
                 input.consume_key(Modifiers::ALT, Key::Backspace),
             )
         });
-        let decision = if always {
+        let empty = draft.trim().is_empty();
+        let (plain, command, escape) = if empty && focused {
+            ui.input_mut(|input| {
+                (
+                    input.consume_key(Modifiers::NONE, Key::Enter),
+                    input.consume_key(Modifiers::COMMAND, Key::Enter),
+                    input.consume_key(Modifiers::NONE, Key::Escape),
+                )
+            })
+        } else {
+            (false, false, false)
+        };
+        let decision = if always || command {
             Some("always")
-        } else if once {
+        } else if once || plain {
             Some("once")
-        } else if reject {
+        } else if reject || escape {
             Some("reject")
         } else {
             None
@@ -797,9 +811,12 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
     let mut editor_height = 0.0;
     let frame = egui::Frame::new()
         .fill(p.card)
+        .stroke(Stroke::new(
+            theme::BORDER,
+            if focused { p.accent_border } else { p.border },
+        ))
         .corner_radius(BOX_RADIUS)
-        .inner_margin(Margin::ZERO)
-        .shadow(box_shadow(&p));
+        .inner_margin(Margin::ZERO);
 
     let box_response = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -847,7 +864,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
                 ))
             })
         };
-        let hint = placeholder_text(ui, home);
+        let hint = placeholder_text(ui, home, busy);
         if ui
             .ctx()
             .data_mut(|data| data.remove_temp::<bool>(Id::unique("focus-composer-once")))
@@ -970,7 +987,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
             text_id,
             home,
             busy,
-            &draft,
+            &mut draft,
             has_attachments,
             &key,
             &mut actions,
@@ -979,23 +996,14 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber, session_id: Option<String>, home
     });
     let composer_rect = box_response.response.rect;
     ui.memory_mut(|memory| memory.data.insert_temp(box_rect_id, composer_rect));
-    let painter = ui.painter();
-    painter.rect_stroke(
-        composer_rect,
-        CornerRadius::same(BOX_RADIUS),
-        Stroke::new(theme::HAIRLINE, p.elevation_ring),
-        StrokeKind::Inside,
-    );
-    let sheen = if p.dark {
-        p.alpha(Color32::WHITE, 10)
-    } else {
-        p.alpha(Color32::WHITE, 179)
-    };
-    let top = Rect::from_min_max(
-        Pos2::new(composer_rect.left() + 1.0, composer_rect.top() + 1.0),
-        Pos2::new(composer_rect.right() - 1.0, composer_rect.top() + 2.0),
-    );
-    painter.rect_filled(top, CornerRadius::ZERO, sheen);
+    if focused {
+        ui.painter().rect_stroke(
+            composer_rect.expand(1.0),
+            CornerRadius::same(BOX_RADIUS + 1),
+            Stroke::new(theme::HAIRLINE, p.focus_ring),
+            StrokeKind::Outside,
+        );
+    }
 
     let dragging_files = ui.input(|input| !input.raw.hovered_files.is_empty());
     if dragging_files {
@@ -1461,10 +1469,19 @@ fn paste_choice_button(ui: &mut Ui, label: &str, p: &Palette) -> bool {
     response.clicked()
 }
 
-fn placeholder_text(ui: &Ui, home: bool) -> String {
+fn placeholder_text(ui: &Ui, home: bool, busy: bool) -> String {
     let _ = home;
-    let long = "Plan, build, or ask. @ to mention, $ for skills, / for commands";
-    let short = "Plan, build, or ask";
+    let (long, short) = if busy {
+        (
+            "Agent is running — press Enter to queue next message…",
+            "Queue next message…",
+        )
+    } else {
+        (
+            "Ask OpenCode, reference @files, or run /commands…",
+            "Ask OpenCode…",
+        )
+    };
     let fits = ui.fonts_mut(|fonts| {
         fonts
             .layout_no_wrap(
@@ -1572,24 +1589,6 @@ fn cycle_agent(app: &mut RustChamber, home: bool, backwards: bool, actions: &mut
     }
 }
 
-fn box_shadow(p: &Palette) -> egui::epaint::Shadow {
-    if p.dark {
-        egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 4,
-            spread: 0,
-            color: Color32::from_black_alpha(64),
-        }
-    } else {
-        egui::epaint::Shadow {
-            offset: [0, 4],
-            blur: 10,
-            spread: 0,
-            color: Color32::from_black_alpha(18),
-        }
-    }
-}
-
 fn glass_shadow(p: &Palette) -> egui::epaint::Shadow {
     egui::epaint::Shadow {
         offset: [0, 8],
@@ -1662,6 +1661,46 @@ fn effort_label(app: &RustChamber) -> Option<String> {
     Some(display_effort(reference.variant.as_deref()))
 }
 
+fn permission_icon(
+    ui: &mut Ui,
+    p: &Palette,
+    allow_all: bool,
+    pending: bool,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(FOOTER_BUTTON), Sense::click());
+    crate::widgets::pointer(ui, &response);
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            p.hover,
+        );
+    }
+    let ink = if pending || !allow_all {
+        p.warning_text
+    } else {
+        p.fg_muted
+    };
+    icons::paint(
+        ui,
+        if allow_all {
+            Icon::ShieldCheck
+        } else {
+            Icon::ShieldUser
+        },
+        Rect::from_center_size(rect.center(), Vec2::splat(14.0)),
+        ink,
+    );
+    if pending {
+        ui.painter().circle_filled(
+            Pos2::new(rect.right() - 3.0, rect.top() + 3.0),
+            2.5,
+            p.coral,
+        );
+    }
+    response
+}
+
 fn composer_footer(
     ui: &mut Ui,
     app: &mut RustChamber,
@@ -1669,7 +1708,7 @@ fn composer_footer(
     text_id: Id,
     home: bool,
     busy: bool,
-    draft: &str,
+    draft: &mut String,
     has_attachments: bool,
     key: &str,
     actions: &mut Vec<Action>,
@@ -1679,14 +1718,30 @@ fn composer_footer(
     egui::Frame::new()
         .inner_margin(Margin {
             left: FOOTER_PAD_X as i8,
-            right: FOOTER_PAD_X as i8,
+            right: FOOTER_PAD_END as i8,
             top: FOOTER_PAD_Y as i8,
             bottom: FOOTER_PAD_Y as i8,
         })
         .show(ui, |ui| {
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().min.y,
+                Stroke::new(theme::HAIRLINE, p.border_soft),
+            );
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(FOOTER_GAP, 0.0);
+                let compact = ui.available_width() < 560.0;
                 composer_attachment_controls(ui, app, p, key);
+                if !compact {
+                    if footer_chip(ui, p, "@ Files", None).clicked() {
+                        insert_text_at_caret(ui.ctx(), text_id, draft, "@");
+                        ui.memory_mut(|memory| memory.request_focus(text_id));
+                    }
+                    if footer_chip(ui, p, "/ Commands", None).clicked() {
+                        insert_text_at_caret(ui.ctx(), text_id, draft, "/");
+                        ui.memory_mut(|memory| memory.request_focus(text_id));
+                    }
+                }
                 let pending = app
                     .model
                     .active
@@ -1701,57 +1756,32 @@ fn composer_footer(
                         .as_ref()
                         .is_some_and(|chat| chat.session.allows_all())
                 };
-                let shield = footer_icon_button(
-                    ui,
-                    if allow_all {
-                        Icon::ShieldCheck
-                    } else {
-                        Icon::ShieldUser
-                    },
-                    FOOTER_GLYPH,
-                    if allow_all { p.blue } else { p.fg_muted },
-                    true,
-                );
-                let label = if pending > 0 {
-                    "Permission needed"
-                } else if allow_all {
-                    "Permissions: allow all"
+                let reserved = if compact {
+                    (FOOTER_BUTTON + FOOTER_GROUP_GAP) * 3.0
                 } else {
-                    "Permissions: ask always"
+                    SHIELD_RESERVE + SEND_RESERVE
                 };
-                if shield.on_hover_text(label).clicked() {
-                    let next = !allow_all;
-                    if home {
-                        app.ui.home_allow_all = next;
-                    } else if let Some(chat) = &app.model.active {
-                        actions.push(Action::SetSessionPermissions {
-                            id: chat.session.id.clone(),
-                            allow_all: next,
-                        });
+                let right_space = (ui.available_width() - reserved).max(0.0);
+                let caps = if compact {
+                    FooterCaps {
+                        agent: 0.0,
+                        effort: 0.0,
+                        model: 0.0,
                     }
-                    app.model.toast(
-                        if next {
-                            rchamber_app::ToastKind::Warning
-                        } else {
-                            rchamber_app::ToastKind::Info
-                        },
-                        if next {
-                            "Permissions: allow all for this session"
-                        } else {
-                            "Permissions: ask always"
-                        },
-                    );
-                }
-
-                let right_space = ui.available_width();
-                let caps = footer_caps(
-                    right_space,
-                    text_width(ui, &agent_label(app), theme::font_medium(12.5)),
-                    effort_label(app).map(|label| text_width(ui, &label, theme::font_medium(12.5))),
-                );
+                } else {
+                    footer_caps(
+                        right_space,
+                        text_width(ui, &agent_label(app), theme::font_mono(11.5)),
+                        effort_label(app)
+                            .map(|label| text_width(ui, &label, theme::font_mono(11.5))),
+                    )
+                };
+                model_control(ui, app, p, home, actions, caps.model, text_id);
+                agent_control(ui, app, p, home, actions, caps.agent);
+                thinking_control(ui, app, p, home, actions, caps.effort, text_id);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(FOOTER_GROUP_GAP, 0.0);
-                    match composer_action_buttons(ui, p, can_send, busy) {
+                    match composer_action_buttons(ui, p, can_send, busy, compact) {
                         ActionChoice::Send => *send = true,
                         ActionChoice::Stop => {
                             if let Some(id) = app.model.active_id().map(str::to_string) {
@@ -1760,9 +1790,46 @@ fn composer_footer(
                         }
                         ActionChoice::None => {}
                     }
-                    agent_control(ui, app, p, home, actions, caps.agent);
-                    model_control(ui, app, p, home, actions, caps.model, text_id);
-                    thinking_control(ui, app, p, home, actions, caps.effort, text_id);
+                    let label = if allow_all {
+                        "Allow all in session"
+                    } else {
+                        "Ask before tools"
+                    };
+                    let shield = if compact {
+                        permission_icon(ui, p, allow_all, pending > 0)
+                    } else {
+                        permission_pill(ui, p, label, allow_all, pending > 0)
+                    };
+                    if shield
+                        .on_hover_text(if allow_all {
+                            "Tools run immediately inside this workspace. Click to ask before every tool."
+                        } else {
+                            "Shell commands, file edits outside the workspace, and network calls require approval."
+                        })
+                        .clicked()
+                    {
+                        let next = !allow_all;
+                        if home {
+                            app.ui.home_allow_all = next;
+                        } else if let Some(chat) = &app.model.active {
+                            actions.push(Action::SetSessionPermissions {
+                                id: chat.session.id.clone(),
+                                allow_all: next,
+                            });
+                        }
+                        app.model.toast(
+                            if next {
+                                rchamber_app::ToastKind::Warning
+                            } else {
+                                rchamber_app::ToastKind::Info
+                            },
+                            if next {
+                                "Permissions: allow all for this session"
+                            } else {
+                                "Permissions: ask always"
+                            },
+                        );
+                    }
                     if busy && can_send {
                         let rect = ui.min_rect();
                         let target = Rect::from_min_size(
@@ -1795,6 +1862,45 @@ fn composer_footer(
         });
 }
 
+fn footer_chip(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    icon: Option<Icon>,
+) -> Response {
+    let font = theme::font_mono(theme::TEXT_TAG);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+    let icon_space = if icon.is_some() { 14.0 } else { 0.0 };
+    let width = galley.size().x + icon_space + 16.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, FOOTER_CHIP), Sense::click());
+    crate::widgets::pointer(ui, &response);
+    let fill = if response.hovered() { p.hover } else { p.tag_bg };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), fill);
+    let mut x = rect.left() + 8.0;
+    if let Some(icon) = icon {
+        icons::paint(
+            ui,
+            icon,
+            Rect::from_center_size(Pos2::new(x + 6.0, rect.center().y), Vec2::splat(11.0)),
+            p.fg_muted,
+        );
+        x += icon_space;
+    }
+    ui.painter().galley(
+        Pos2::new(x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        if response.hovered() {
+            p.fg
+        } else {
+            p.fg_muted
+        },
+    );
+    response
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActionChoice {
     None,
@@ -1802,55 +1908,170 @@ enum ActionChoice {
     Stop,
 }
 
-fn composer_action_buttons(ui: &mut Ui, p: &Palette, can_send: bool, busy: bool) -> ActionChoice {
-    if !busy {
-        if footer_icon_button(ui, Icon::Send, FOOTER_SEND_GLYPH, p.primary, can_send).clicked() {
-            return ActionChoice::Send;
-        }
+fn composer_action_buttons(
+    ui: &mut Ui,
+    p: &Palette,
+    can_send: bool,
+    busy: bool,
+    compact: bool,
+) -> ActionChoice {
+    let (label, hint) = if busy {
+        ("Stop", "\u{238b}")
+    } else {
+        ("Send", "\u{21b5}")
+    };
+    let label_galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_semibold(theme::TEXT_BUTTON),
+        Color32::PLACEHOLDER,
+    );
+    let hint_galley = ui.painter().layout_no_wrap(
+        hint.to_string(),
+        theme::font_mono(10.5),
+        Color32::PLACEHOLDER,
+    );
+    let width = if compact {
+        SEND_HEIGHT
+    } else {
+        12.0 + label_galley.size().x + 6.0 + hint_galley.size().x + 8.0 + 12.0
+    };
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, SEND_HEIGHT), Sense::click());
+    let enabled = busy || can_send;
+    if enabled {
+        crate::widgets::pointer(ui, &response);
+    }
+    let (fill, border, ink) = if busy {
+        (p.error_soft, Some(p.error_border), p.error_text)
+    } else {
+        (
+            if response.hovered() && enabled {
+                p.primary_hover
+            } else {
+                p.primary
+            },
+            None,
+            p.on_primary,
+        )
+    };
+    let fill = if enabled {
+        fill
+    } else {
+        p.alpha(fill, if p.dark { 90 } else { 110 })
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::DEMO), fill);
+    if let Some(border) = border {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::DEMO),
+            Stroke::new(theme::BORDER, border),
+            StrokeKind::Inside,
+        );
+    }
+    let ink = if enabled { ink } else { p.disabled };
+    if compact {
+        icons::paint(
+            ui,
+            if busy { Icon::Stop } else { Icon::Send },
+            Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
+            ink,
+        );
+    } else {
+        ui.painter().galley(
+            Pos2::new(
+                rect.left() + 12.0,
+                rect.center().y - label_galley.size().y * 0.5,
+            ),
+            label_galley,
+            ink,
+        );
+        let hint_rect = Rect::from_center_size(
+            Pos2::new(
+                rect.right() - 12.0 - (hint_galley.size().x + 8.0) * 0.5,
+                rect.center().y,
+            ),
+            Vec2::new(hint_galley.size().x + 8.0, 15.0),
+        );
+        ui.painter()
+            .rect_filled(hint_rect, CornerRadius::same(3), p.alpha(ink, 24));
+        ui.painter().galley(
+            Pos2::new(
+                hint_rect.center().x - hint_galley.size().x * 0.5,
+                rect.center().y - hint_galley.size().y * 0.5,
+            ),
+            hint_galley,
+            ink.gamma_multiply(0.82),
+        );
+    }
+    if !enabled || !response.clicked() {
         return ActionChoice::None;
     }
-    if footer_icon_button(ui, Icon::Stop, FOOTER_STOP_GLYPH, p.red, true).clicked() {
-        return ActionChoice::Stop;
+    if busy {
+        ActionChoice::Stop
+    } else {
+        ActionChoice::Send
     }
-    ActionChoice::None
 }
 
-fn footer_icon_button(
+fn permission_pill(
     ui: &mut Ui,
-    icon: Icon,
-    glyph: f32,
-    tint: Color32,
-    enabled: bool,
+    p: &Palette,
+    label: &str,
+    allow_all: bool,
+    pending: bool,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(FOOTER_BUTTON), Sense::click());
-    let color = if enabled {
-        tint
+    let font = theme::font_mono(11.5);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+    let width = galley.size().x + 12.0 + 14.0 + 6.0 + 12.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
+    crate::widgets::pointer(ui, &response);
+    let (fill, border, ink) = if pending {
+        (p.warning_soft, p.warning_border, p.warning_text)
+    } else if allow_all {
+        (p.tag_bg, p.border, p.fg_muted)
     } else {
-        Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 77)
+        (p.warning_soft, p.warning_border, p.warning_text)
     };
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(theme::radius::SM),
+        fill,
+    );
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(theme::radius::SM),
+        Stroke::new(theme::HAIRLINE, border),
+        StrokeKind::Inside,
+    );
     icons::paint(
         ui,
-        icon,
-        Rect::from_center_size(rect.center(), Vec2::splat(glyph)),
-        color,
+        if allow_all {
+            Icon::ShieldCheck
+        } else {
+            Icon::ShieldUser
+        },
+        Rect::from_center_size(
+            Pos2::new(rect.left() + 12.0 + 7.0, rect.center().y),
+            Vec2::splat(14.0),
+        ),
+        ink,
     );
-    if enabled && response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
+    ui.painter().galley(
+        Pos2::new(
+            rect.left() + 12.0 + 14.0 + 6.0,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        ink,
+    );
     response
 }
 
 fn composer_attachment_controls(ui: &mut Ui, app: &mut RustChamber, p: &Palette, key: &str) {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(FOOTER_BUTTON), Sense::click());
-    icons::paint(
-        ui,
-        Icon::Plus,
-        Rect::from_center_size(rect.center(), Vec2::splat(FOOTER_GLYPH)),
-        if response.hovered() { p.fg } else { p.fg_muted },
-    );
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
+    let response = footer_chip(ui, p, "+ Attach", None);
     let id = Id::unique(("attach-menu", key.to_string()));
     let mut open = app.ui.attach_menu;
     let mut items: Vec<Response> = Vec::new();
@@ -1906,7 +2127,8 @@ fn model_control(
     let provider_id = model
         .as_ref()
         .map(|reference| reference.provider_id.as_str());
-    let name_response = model_button(ui, &name_label, provider_id, p, max_width);
+    let name_response = model_button(ui, &name_label, provider_id, p, max_width)
+        .on_hover_text(name_label.clone());
     let id = Id::unique("model-picker");
     let mut open = app.ui.model_menu;
     menu_popup(
@@ -2147,7 +2369,7 @@ fn model_button(
     let galley = row_galley(
         ui,
         label,
-        theme::font_medium(12.5),
+        theme::font_mono(11.5),
         p.fg_muted,
         cap.max(1.0),
     );
@@ -2235,7 +2457,7 @@ fn icon_label_button(
     let galley = row_galley(
         ui,
         label,
-        theme::font_medium(12.5),
+        theme::font_mono(11.5),
         text_color,
         cap.max(1.0),
     );
@@ -2767,6 +2989,16 @@ fn queued_messages_strip(
     let width = ui.available_width();
     let count = entries.len();
     let strip_top = ui.cursor().min.y;
+    if count == 1 {
+        ui.painter().rect_filled(
+            Rect::from_min_size(
+                Pos2::new(ui.max_rect().left(), strip_top),
+                Vec2::new(width, QUEUE_ROW),
+            ),
+            CornerRadius::ZERO,
+            p.subtle,
+        );
+    }
     let mut expanded = true;
     let mut can_collapse = false;
     if count > 1 {
@@ -2893,7 +3125,7 @@ fn queued_messages_strip(
     ui.painter().hline(
         ui.max_rect().x_range(),
         strip_bottom - 0.25,
-        Stroke::new(theme::HAIRLINE, p.alpha(p.border, 134)),
+        Stroke::new(theme::HAIRLINE, p.border_soft),
     );
 }
 
@@ -3005,7 +3237,11 @@ fn paint_queue_row(
     let right = row.right() - QUEUE_ROW_INSET_END;
     let mut buttons: Vec<(&str, Icon, Color32)> = Vec::new();
     if !entry.scheduled {
-        buttons.push(("Send", Icon::Send, p.fg_muted));
+        if single {
+            buttons.push(("Send now", Icon::Send, p.primary_text));
+        } else {
+            buttons.push(("Send", Icon::Send, p.fg_muted));
+        }
         buttons.push(("Edit", Icon::Pencil, p.fg_muted));
     }
     let remove = Icon::Close;
@@ -3035,6 +3271,8 @@ fn paint_queue_row(
         .to_string();
     let label = if first_line.is_empty() {
         "Empty message".to_string()
+    } else if single {
+        format!("1 message queued: \u{201c}{first_line}\u{201d}{suffix}")
     } else {
         format!("{first_line}{suffix}")
     };
@@ -3121,7 +3359,7 @@ fn paint_queue_row(
         if queue_label_button(ui, &entry.id, label, *icon, *tint, button_rect, p, lifted) && !lifted
         {
             match *label {
-                "Send" => {
+                "Send" | "Send now" => {
                     if let Some(session) = session_id {
                         actions.push(Action::SetInboxDelivery {
                             session_id: session.to_string(),
@@ -3276,18 +3514,25 @@ fn file_chip(
     } else {
         String::new()
     };
-    let name_galley = row_galley(ui, &name, theme::font(12.0), p.fg, ATTACHMENT_NAME_MAX);
+    let name_galley = row_galley(
+        ui,
+        &name,
+        theme::font_mono(theme::TEXT_MICRO),
+        p.fg,
+        ATTACHMENT_NAME_MAX,
+    );
     let size_galley = if size.is_empty() {
         None
     } else {
-        Some(
-            ui.painter()
-                .layout_no_wrap(size.clone(), theme::font(12.0), p.fg_muted),
-        )
+        Some(ui.painter().layout_no_wrap(
+            size.clone(),
+            theme::font_mono(theme::TEXT_TAG),
+            p.fg_muted,
+        ))
     };
     let width = 8.0
         + ATTACHMENT_ICON
-        + 6.0
+        + 5.0
         + name_galley.size().x
         + size_galley
             .as_ref()
@@ -3298,16 +3543,19 @@ fn file_chip(
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, ATTACHMENT_HEIGHT), Sense::hover());
     let stroke = if response.hovered() {
-        p.alpha(p.border, 191)
+        p.border_hover
     } else {
-        p.alpha(p.border, 134)
+        p.border
     };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::radius::TABLE), p.bg);
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(theme::radius::XS),
+        p.raised_fill(),
+    );
     ui.painter().rect_stroke(
         rect,
-        CornerRadius::same(theme::radius::TABLE),
-        Stroke::new(1.0, stroke),
+        CornerRadius::same(theme::radius::XS),
+        Stroke::new(theme::BORDER, stroke),
         StrokeKind::Inside,
     );
     icons::paint(
@@ -3319,7 +3567,7 @@ fn file_chip(
         ),
         p.fg_muted,
     );
-    let mut x = rect.left() + 8.0 + ATTACHMENT_ICON + 6.0;
+    let mut x = rect.left() + 8.0 + ATTACHMENT_ICON + 5.0;
     ui.painter().with_clip_rect(rect).galley(
         Pos2::new(x, rect.center().y - name_galley.size().y / 2.0),
         name_galley.clone(),
@@ -3353,7 +3601,7 @@ fn file_chip(
     icons::paint(
         ui,
         Icon::Close,
-        Rect::from_center_size(close.center(), Vec2::splat(14.0)),
+        Rect::from_center_size(close.center(), Vec2::splat(10.0)),
         p.fg_muted,
     );
     if close_response.clicked() {
@@ -3399,160 +3647,12 @@ fn permission_dock(
         .iter()
         .position(|entry| entry.id == request.id)
         .unwrap_or(0);
-    let collapsed_id = Id::unique(("composer-dock-collapsed", request.id.as_str()));
-    let mut collapsed = ui
-        .memory(|memory| memory.data.get_temp::<bool>(collapsed_id))
-        .unwrap_or(false);
     let response = composer_floating_panel(
         ui,
         p,
         Id::unique(("composer-dock-motion", request.id.as_str())),
         |ui| {
-            egui::Frame::new()
-                .inner_margin(Margin {
-                    left: 12,
-                    right: 12,
-                    top: 6,
-                    bottom: 6,
-                })
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
-                        icons::icon(ui, Icon::Warning, 14.0, p.coral);
-                        let toggle = footer_icon_button(
-                            ui,
-                            if collapsed {
-                                Icon::ChevronRight
-                            } else {
-                                Icon::ChevronDown
-                            },
-                            16.0,
-                            p.fg_muted,
-                            true,
-                        );
-                        let title = ui.label(
-                            RichText::new("Permission needed")
-                                .font(theme::font(13.5))
-                                .color(p.fg),
-                        );
-                        if toggle.clicked() || title.clicked() {
-                            collapsed = !collapsed;
-                            ui.memory_mut(|memory| {
-                                memory.data.insert_temp(collapsed_id, collapsed)
-                            });
-                        }
-                        if requests.len() > 1 {
-                            ui.label(
-                                RichText::new(format!("{}/{}", index + 1, requests.len()))
-                                    .font(theme::font(12.0))
-                                    .color(p.fg_muted),
-                            );
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(shorten(&request.action, 40))
-                                    .font(theme::font_medium(12.5))
-                                    .color(p.fg_muted),
-                            );
-                        });
-                    });
-                });
-            if collapsed {
-                return;
-            }
-            egui::Frame::new()
-                .inner_margin(Margin {
-                    left: 16,
-                    right: 16,
-                    top: 0,
-                    bottom: 6,
-                })
-                .show(ui, |ui| {
-                    ScrollArea::vertical()
-                        .id_salt(("permission-body", &request.id))
-                        .max_height(ui.ctx().content_rect().height() * 0.5)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            if let Some(resource) = request.resources.first() {
-                                ui.label(
-                                    RichText::new(shorten(resource, 160))
-                                        .font(theme::font_mono(11.5))
-                                        .color(p.fg_muted),
-                                );
-                            }
-                            if let Some(message) = &request.message {
-                                ui.add_space(2.0);
-                                ui.label(
-                                    RichText::new(shorten(message, 200))
-                                        .font(theme::font(12.5))
-                                        .color(p.fg_muted),
-                                );
-                            }
-                        });
-                });
-            egui::Frame::new()
-                .inner_margin(Margin {
-                    left: 12,
-                    right: 12,
-                    top: 4,
-                    bottom: 8,
-                })
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-                        if widgets::button(
-                            ui,
-                            "Deny",
-                            Some(Icon::Close),
-                            widgets::ButtonVariant::Ghost,
-                            widgets::ButtonSize::Xs,
-                            p,
-                        )
-                        .clicked()
-                        {
-                            actions.push(Action::ReplyPermission {
-                                session_id: request.session_id.clone(),
-                                request_id: request.id.clone(),
-                                decision: "reject".into(),
-                            });
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-                            if widgets::button(
-                                ui,
-                                "Allow once",
-                                Some(Icon::Check),
-                                widgets::ButtonVariant::Primary,
-                                widgets::ButtonSize::Xs,
-                                p,
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::ReplyPermission {
-                                    session_id: request.session_id.clone(),
-                                    request_id: request.id.clone(),
-                                    decision: "once".into(),
-                                });
-                            }
-                            if widgets::button(
-                                ui,
-                                "Always allow",
-                                None,
-                                widgets::ButtonVariant::Outline,
-                                widgets::ButtonSize::Xs,
-                                p,
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::ReplyPermission {
-                                    session_id: request.session_id.clone(),
-                                    request_id: request.id.clone(),
-                                    decision: "always".into(),
-                                });
-                            }
-                        });
-                    });
-                });
+            crate::chat::approval_card(ui, p, request, index, requests.len(), actions);
         },
     );
     response.response.rect.height()
@@ -4595,12 +4695,14 @@ mod tests {
     }
 
     #[test]
-    fn box_is_720_wide_inside_the_768_column() {
-        assert_eq!(composer_width(1400.0), 720.0);
+    fn box_takes_the_full_760_column() {
+        assert_eq!(composer_width(1400.0), 760.0);
         assert_eq!(composer_width(768.0), 736.0);
         assert!(composer_width(600.0) < 600.0);
-        assert_eq!(EDITOR_PAD_TOP, 16.0);
-        assert_eq!(EDITOR_PAD_BOTTOM, 10.0);
+        assert_eq!(EDITOR_PAD_TOP, 9.0);
+        assert_eq!(EDITOR_PAD_BOTTOM, 9.0);
+        assert_eq!(EDITOR_LINE_HEIGHT, 22.0);
+        assert_eq!(BOX_RADIUS, 10);
     }
 
     #[test]
@@ -4623,12 +4725,14 @@ mod tests {
 
     #[test]
     fn attachment_and_queue_metrics_match_the_reference() {
-        assert_eq!(ATTACHMENT_HEIGHT, 28.0);
+        assert_eq!(ATTACHMENT_HEIGHT, 22.0);
         assert_eq!(ATTACHMENT_NAME_MAX, 200.0);
-        assert_eq!(QUEUE_ROW, 32.0);
-        assert_eq!(EDITOR_MIN_HEIGHT, 64.0);
+        assert_eq!(QUEUE_ROW, 26.0);
+        assert_eq!(EDITOR_MIN_HEIGHT, 40.0);
         assert_eq!(FOOTER_BUTTON, 24.0);
-        assert_eq!(FOOTER_GLYPH, 16.0);
+        assert_eq!(FOOTER_CHIP, 22.0);
+        assert_eq!(SEND_HEIGHT, 26.0);
+        assert_eq!(FOOTER_HEIGHT, 32.0);
     }
 
     #[test]
