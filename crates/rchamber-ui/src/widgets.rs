@@ -473,9 +473,9 @@ pub fn button_ex(
     } else {
         theme::font_medium(size.font_size())
     };
-    let measured = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
+    let measured =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
     let icon_only = variant == ButtonVariant::Icon && label.trim().is_empty() && icon.is_some();
     let icon_space = match (icon, icon_only) {
         (None, _) => 0.0,
@@ -503,17 +503,13 @@ pub fn button_ex(
     );
     let text_room = (width - pad * 2.0 - icon_space).max(0.0);
     let galley = if measured.size().x > text_room {
-        egui::WidgetText::from(
-            RichText::new(label)
-                .font(font)
-                .color(Color32::PLACEHOLDER),
-        )
-        .into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            text_room,
-            egui::TextStyle::Button,
-        )
+        egui::WidgetText::from(RichText::new(label).font(font).color(Color32::PLACEHOLDER))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                text_room,
+                egui::TextStyle::Button,
+            )
     } else {
         measured
     };
@@ -757,7 +753,14 @@ pub fn neutral_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette)
 }
 
 pub fn secondary_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Secondary, ButtonSize::App, p)
+    button(
+        ui,
+        label,
+        icon,
+        ButtonVariant::Secondary,
+        ButtonSize::App,
+        p,
+    )
 }
 
 pub fn app_button(

@@ -1661,20 +1661,12 @@ fn effort_label(app: &RustChamber) -> Option<String> {
     Some(display_effort(reference.variant.as_deref()))
 }
 
-fn permission_icon(
-    ui: &mut Ui,
-    p: &Palette,
-    allow_all: bool,
-    pending: bool,
-) -> Response {
+fn permission_icon(ui: &mut Ui, p: &Palette, allow_all: bool, pending: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(FOOTER_BUTTON), Sense::click());
     crate::widgets::pointer(ui, &response);
     if response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::radius::SM),
-            p.hover,
-        );
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(theme::radius::SM), p.hover);
     }
     let ink = if pending || !allow_all {
         p.warning_text
@@ -1862,12 +1854,7 @@ fn composer_footer(
         });
 }
 
-fn footer_chip(
-    ui: &mut Ui,
-    p: &Palette,
-    label: &str,
-    icon: Option<Icon>,
-) -> Response {
+fn footer_chip(ui: &mut Ui, p: &Palette, label: &str, icon: Option<Icon>) -> Response {
     let font = theme::font_mono(theme::TEXT_TAG);
     let galley = ui
         .painter()
@@ -1876,7 +1863,11 @@ fn footer_chip(
     let width = galley.size().x + icon_space + 16.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, FOOTER_CHIP), Sense::click());
     crate::widgets::pointer(ui, &response);
-    let fill = if response.hovered() { p.hover } else { p.tag_bg };
+    let fill = if response.hovered() {
+        p.hover
+    } else {
+        p.tag_bg
+    };
     ui.painter()
         .rect_filled(rect, CornerRadius::same(theme::radius::XS), fill);
     let mut x = rect.left() + 8.0;
@@ -1892,11 +1883,7 @@ fn footer_chip(
     ui.painter().galley(
         Pos2::new(x, rect.center().y - galley.size().y * 0.5),
         galley,
-        if response.hovered() {
-            p.fg
-        } else {
-            p.fg_muted
-        },
+        if response.hovered() { p.fg } else { p.fg_muted },
     );
     response
 }
@@ -1935,8 +1922,7 @@ fn composer_action_buttons(
     } else {
         12.0 + label_galley.size().x + 6.0 + hint_galley.size().x + 8.0 + 12.0
     };
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, SEND_HEIGHT), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, SEND_HEIGHT), Sense::click());
     let enabled = busy || can_send;
     if enabled {
         crate::widgets::pointer(ui, &response);
@@ -2035,11 +2021,8 @@ fn permission_pill(
     } else {
         (p.warning_soft, p.warning_border, p.warning_text)
     };
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(theme::radius::SM),
-        fill,
-    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::SM), fill);
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(theme::radius::SM),
@@ -2127,8 +2110,8 @@ fn model_control(
     let provider_id = model
         .as_ref()
         .map(|reference| reference.provider_id.as_str());
-    let name_response = model_button(ui, &name_label, provider_id, p, max_width)
-        .on_hover_text(name_label.clone());
+    let name_response =
+        model_button(ui, &name_label, provider_id, p, max_width).on_hover_text(name_label.clone());
     let id = Id::unique("model-picker");
     let mut open = app.ui.model_menu;
     menu_popup(
@@ -2366,13 +2349,7 @@ fn model_button(
 ) -> Response {
     let cap = max_width.clamp(0.0, LABEL_MAX_WIDTH);
     let show_label = cap >= 12.0;
-    let galley = row_galley(
-        ui,
-        label,
-        theme::font_mono(11.5),
-        p.fg_muted,
-        cap.max(1.0),
-    );
+    let galley = row_galley(ui, label, theme::font_mono(11.5), p.fg_muted, cap.max(1.0));
     let lead = if provider.is_some() { 22.0 } else { 0.0 };
     let width = if show_label {
         galley.size().x + lead + 4.0 + 10.0
@@ -2454,13 +2431,7 @@ fn icon_label_button(
 ) -> Response {
     let cap = max_width.clamp(0.0, LABEL_MAX_WIDTH);
     let show_label = cap >= 12.0;
-    let galley = row_galley(
-        ui,
-        label,
-        theme::font_mono(11.5),
-        text_color,
-        cap.max(1.0),
-    );
+    let galley = row_galley(ui, label, theme::font_mono(11.5), text_color, cap.max(1.0));
     let width = if show_label {
         galley.size().x + 24.0
     } else {
@@ -3547,11 +3518,8 @@ fn file_chip(
     } else {
         p.border
     };
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(theme::radius::XS),
-        p.raised_fill(),
-    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.raised_fill());
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(theme::radius::XS),

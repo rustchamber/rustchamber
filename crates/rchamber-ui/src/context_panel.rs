@@ -130,8 +130,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     );
     if let Some(select) = header.select {
         tab = select.min(2) as u8;
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(tab_id, tab));
+        ui.ctx().data_mut(|data| data.insert_temp(tab_id, tab));
     }
 
     if close {
@@ -293,16 +292,13 @@ fn telemetry_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
                 metric_cell(ui, p, "Session cost", &cost_value, column);
             });
             ui.add_space(8.0);
-            let (track, _) =
-                ui.allocate_exact_size(Vec2::new(width, 3.0), Sense::hover());
+            let (track, _) = ui.allocate_exact_size(Vec2::new(width, 3.0), Sense::hover());
             ui.painter()
                 .rect_filled(track, CornerRadius::same(2), p.alpha(p.fg, 20));
             let fraction = fraction_used(used, limit);
             if fraction > 0.0 {
-                let fill = Rect::from_min_size(
-                    track.min,
-                    Vec2::new((width * fraction).max(3.0), 3.0),
-                );
+                let fill =
+                    Rect::from_min_size(track.min, Vec2::new((width * fraction).max(3.0), 3.0));
                 ui.painter()
                     .rect_filled(fill, CornerRadius::same(2), meter_color(fraction, p));
             }
@@ -310,31 +306,27 @@ fn telemetry_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
 }
 
 fn metric_cell(ui: &mut Ui, p: &Palette, label: &str, value: &str, width: f32) {
-    ui.allocate_ui_with_layout(
-        Vec2::new(width, 0.0),
-        Layout::top_down(Align::Min),
-        |ui| {
-            ui.set_width(width);
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
-            ui.add(
-                egui::Label::new(
-                    RichText::new(label)
-                        .font(theme::font_mono(11.5))
-                        .color(p.fg_muted),
-                )
-                .truncate(),
-            );
-            ui.add_space(2.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(value)
-                        .font(theme::font_mono(11.5))
-                        .color(p.fg),
-                )
-                .truncate(),
-            );
-        },
-    );
+    ui.allocate_ui_with_layout(Vec2::new(width, 0.0), Layout::top_down(Align::Min), |ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        ui.add(
+            egui::Label::new(
+                RichText::new(label)
+                    .font(theme::font_mono(11.5))
+                    .color(p.fg_muted),
+            )
+            .truncate(),
+        );
+        ui.add_space(2.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(value)
+                    .font(theme::font_mono(11.5))
+                    .color(p.fg),
+            )
+            .truncate(),
+        );
+    });
 }
 
 fn quota_number(value: f64) -> String {
@@ -362,11 +354,7 @@ fn session_files(app: &RustChamber) -> Vec<FileDiff> {
 
 fn touched_section(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
     let files = session_files(app);
-    widgets::section_eyebrow(
-        ui,
-        &format!("Touched in this session ({})", files.len()),
-        p,
-    );
+    widgets::section_eyebrow(ui, &format!("Touched in this session ({})", files.len()), p);
     ui.add_space(2.0);
     if files.is_empty() {
         muted_note(ui, p, "No files touched yet");
@@ -376,10 +364,7 @@ fn touched_section(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
     for file in files.iter().take(TOUCHED_LIMIT) {
         let status = file.status.clone().unwrap_or_else(|| "modified".into());
         let (letter, color) = status_mark(&status, p);
-        let stats = format!(
-            "{letter} +{} −{}",
-            file.additions, file.deletions
-        );
+        let stats = format!("{letter} +{} −{}", file.additions, file.deletions);
         let row = tree_row(ui, p, &file.file, &stats, color, None, 0.0);
         if row.clicked() {
             copy = Some(file.file.clone());
@@ -516,11 +501,7 @@ fn extension_status_section(ui: &mut Ui, p: &Palette, app: &RustChamber) {
 
 fn files_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
     let files = session_files(app);
-    widgets::section_eyebrow(
-        ui,
-        &format!("Touched in this session ({})", files.len()),
-        p,
-    );
+    widgets::section_eyebrow(ui, &format!("Touched in this session ({})", files.len()), p);
     ui.add_space(2.0);
     if files.is_empty() {
         muted_note(ui, p, "No files touched yet");
@@ -571,11 +552,7 @@ fn tree_row(
     let chip_width = chip
         .map(|label| {
             ui.painter()
-                .layout_no_wrap(
-                    label.to_string(),
-                    theme::font_mono(11.0),
-                    p.fg_muted,
-                )
+                .layout_no_wrap(label.to_string(), theme::font_mono(11.0), p.fg_muted)
                 .size()
                 .x
                 + 12.0
@@ -605,11 +582,9 @@ fn tree_row(
     );
     let mut x = right_edge;
     if let Some(label) = chip {
-        let galley = ui.painter().layout_no_wrap(
-            label.to_string(),
-            theme::font_mono(11.0),
-            p.fg_muted,
-        );
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label.to_string(), theme::font_mono(11.0), p.fg_muted);
         let chip_rect = Rect::from_min_size(
             Pos2::new(
                 x - galley.size().x - 12.0,
@@ -617,13 +592,13 @@ fn tree_row(
             ),
             Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
         );
-        ui.painter().rect_filled(
-            chip_rect,
-            CornerRadius::same(theme::radius::XS),
-            p.tag_bg,
-        );
+        ui.painter()
+            .rect_filled(chip_rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
         ui.painter().galley(
-            Pos2::new(chip_rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+            Pos2::new(
+                chip_rect.left() + 6.0,
+                rect.center().y - galley.size().y * 0.5,
+            ),
             galley,
             p.fg_muted,
         );
@@ -642,11 +617,9 @@ fn tree_row(
 }
 
 fn status_chip(ui: &mut Ui, label: &str, fg: Color32, bg: Color32) {
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        theme::font_mono(11.0),
-        fg,
-    );
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), theme::font_mono(11.0), fg);
     let (rect, _) = ui.allocate_exact_size(
         Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
         Sense::hover(),
@@ -694,8 +667,7 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
         .unwrap_or_default();
     let start = app.workspace_directory();
     let root = rchamber_git::discover(std::path::Path::new(&start));
-    let stale =
-        cache.loaded_at == 0.0 || now - cache.loaded_at > GIT_REFRESH || cache.root != root;
+    let stale = cache.loaded_at == 0.0 || now - cache.loaded_at > GIT_REFRESH || cache.root != root;
     if stale {
         cache = GitCache {
             root: root.clone(),
@@ -713,13 +685,20 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
 
     let summary_id = egui::Id::unique("context.git.summary");
     let description_id = egui::Id::unique("context.git.description");
-    let mut summary: String = ui.ctx().data(|data| data.get_temp(summary_id)).unwrap_or_default();
+    let mut summary: String = ui
+        .ctx()
+        .data(|data| data.get_temp(summary_id))
+        .unwrap_or_default();
     let mut description: String = ui
         .ctx()
         .data(|data| data.get_temp(description_id))
         .unwrap_or_default();
 
-    let staged: Vec<String> = cache.status.staged().map(|file| file.path.clone()).collect();
+    let staged: Vec<String> = cache
+        .status
+        .staged()
+        .map(|file| file.path.clone())
+        .collect();
     let unstaged: Vec<String> = cache
         .status
         .unstaged()
@@ -755,7 +734,10 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
     icons::paint(
         ui,
         Icon::Branch,
-        Rect::from_center_size(Pos2::new(bar.left() + 12.0, bar.center().y), Vec2::splat(14.0)),
+        Rect::from_center_size(
+            Pos2::new(bar.left() + 12.0, bar.center().y),
+            Vec2::splat(14.0),
+        ),
         p.fg_muted,
     );
     let branch_galley = surfaces::truncated_galley(
@@ -766,7 +748,10 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
         (bar.width() - 160.0).max(40.0),
     );
     ui.painter().galley(
-        Pos2::new(bar.left() + 22.0, bar.center().y - branch_galley.size().y * 0.5),
+        Pos2::new(
+            bar.left() + 22.0,
+            bar.center().y - branch_galley.size().y * 0.5,
+        ),
         branch_galley,
         p.fg,
     );
@@ -854,9 +839,7 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
             if enabled
                 && (clicked
                     || (ui.ui_contains_pointer()
-                        && ui.input_mut(|input| {
-                            input.consume_key(Modifiers::COMMAND, Key::Enter)
-                        })))
+                        && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter))))
             {
                 commit = true;
             }
@@ -898,13 +881,7 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
         muted_note(ui, p, "No commits yet");
     }
 
-    if !stage_all
-        && !unstage_all
-        && !fetch
-        && !pull
-        && !push
-        && !commit
-    {
+    if !stage_all && !unstage_all && !fetch && !pull && !push && !commit {
         ui.ctx().data_mut(|data| {
             data.insert_temp(summary_id, summary.clone());
             data.insert_temp(description_id, description.clone());
@@ -970,10 +947,8 @@ fn git_tab(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
 }
 
 fn commit_field(ui: &mut Ui, p: &Palette, text: &mut String, hint: &str, height: f32) {
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), height),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
     let id = response.id.with(("commit-field", hint));
     let focused = ui.memory(|memory| memory.has_focus(id));
     let corner = CornerRadius::same(theme::radius::XS);
@@ -982,7 +957,11 @@ fn commit_field(ui: &mut Ui, p: &Palette, text: &mut String, hint: &str, height:
         rect,
         corner,
         Stroke::new(
-            if focused { theme::BORDER } else { theme::HAIRLINE },
+            if focused {
+                theme::BORDER
+            } else {
+                theme::HAIRLINE
+            },
             if focused { p.border_focus } else { p.border },
         ),
         egui::StrokeKind::Inside,
@@ -1023,10 +1002,7 @@ fn eyebrow_action(
     action: Option<&str>,
     enabled: Option<bool>,
 ) -> bool {
-    let (rect, _) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), 22.0),
-        Sense::hover(),
-    );
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::hover());
     ui.painter().text(
         Pos2::new(rect.left(), rect.center().y),
         Align2::LEFT_CENTER,
@@ -1052,7 +1028,14 @@ fn eyebrow_action(
         galley,
         if enabled { p.primary } else { p.disabled },
     );
-    enabled && ui.interact(action_rect, ui.scope_id().with((text, action)), Sense::click()).clicked()
+    enabled
+        && ui
+            .interact(
+                action_rect,
+                ui.scope_id().with((text, action)),
+                Sense::click(),
+            )
+            .clicked()
 }
 
 fn fraction_used(used: f64, limit: f64) -> f32 {

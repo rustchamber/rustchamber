@@ -666,8 +666,11 @@ fn paint_panel_tab(ui: &Ui, p: &Palette, tab: &PanelTab, rect: Rect, hover: f32,
         Vec2::splat(TAB_ICON),
     );
     if tab.active {
-        ui.painter()
-            .circle_filled(marker.center(), TAB_DOT * 0.5, theme::scale_alpha(p.primary, opacity));
+        ui.painter().circle_filled(
+            marker.center(),
+            TAB_DOT * 0.5,
+            theme::scale_alpha(p.primary, opacity),
+        );
     } else {
         icons::paint(ui, tab.icon, marker, icon_color);
     }
@@ -1153,8 +1156,7 @@ mod tests {
         }
         let dot = shapes.iter().find_map(|shape| match shape {
             egui::Shape::Circle(circle)
-                if circle.fill == p.primary
-                    && (circle.radius - TAB_DOT * 0.5).abs() < 0.01 =>
+                if circle.fill == p.primary && (circle.radius - TAB_DOT * 0.5).abs() < 0.01 =>
             {
                 Some(circle)
             }

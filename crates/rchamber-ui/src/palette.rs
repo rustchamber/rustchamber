@@ -543,7 +543,10 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
     }
     if selected {
         ui.painter().rect_filled(
-            Rect::from_min_size(Pos2::new(row.left(), row.top() + 4.0), Vec2::new(2.0, row.height() - 8.0)),
+            Rect::from_min_size(
+                Pos2::new(row.left(), row.top() + 4.0),
+                Vec2::new(2.0, row.height() - 8.0),
+            ),
             CornerRadius::same(1),
             p.primary,
         );
@@ -609,7 +612,10 @@ fn entry_row(ui: &mut Ui, p: &Palette, entry: &Entry, selected: bool) -> egui::R
     }
     if let Some(galley) = shortcut {
         let cap = Rect::from_min_size(
-            Pos2::new(shortcut_left - 6.0, row.center().y - theme::TAG_HEIGHT * 0.5),
+            Pos2::new(
+                shortcut_left - 6.0,
+                row.center().y - theme::TAG_HEIGHT * 0.5,
+            ),
             Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
         );
         ui.painter()

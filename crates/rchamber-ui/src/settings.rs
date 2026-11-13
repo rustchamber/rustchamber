@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, EventFilter, Id, Key, Layout, Margin,
-    Modifiers, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2,
+    self, Align, Align2, Color32, CornerRadius, EventFilter, Id, Key, Layout, Margin, Modifiers,
+    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2,
 };
 use rchamber_api::models::{Agent, Command, Model, Provider, Skill};
 use rchamber_app::format::compact_number;
@@ -75,7 +75,6 @@ const WINDOW_MIN_HEIGHT: f32 = 300.0;
 const WINDOW_EDGE_GAP: f32 = 24.0;
 const MODAL_SCALE_FROM: f32 = 0.98;
 const REOPEN_AFTER: f64 = 0.25;
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 enum Section {
@@ -935,11 +934,8 @@ fn nav_row(
             ),
             Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
         );
-        ui.painter().rect_filled(
-            chip_rect,
-            CornerRadius::same(theme::radius::XS),
-            p.tag_bg,
-        );
+        ui.painter()
+            .rect_filled(chip_rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
         ui.painter().galley(
             Pos2::new(
                 chip_rect.left() + 6.0,
@@ -1818,13 +1814,9 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         let hex = format!("#{:02x}{:02x}{:02x}", accent.r(), accent.g(), accent.b());
         appearance_inline_row(ui, p, "Brand accent", 152.0, |ui| {
             let (swatch, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+            ui.painter().circle_filled(swatch.center(), 9.0, accent);
             ui.painter()
-                .circle_filled(swatch.center(), 9.0, accent);
-            ui.painter().circle_stroke(
-                swatch.center(),
-                9.0,
-                Stroke::new(theme::BORDER, p.fg),
-            );
+                .circle_stroke(swatch.center(), 9.0, Stroke::new(theme::BORDER, p.fg));
             ui.add_space(2.0);
             widgets::tag_chip(ui, &hex, p);
         });
@@ -1950,7 +1942,11 @@ fn appearance(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         .unwrap_or(0);
     let mut animated = appearance_settings.animated;
     appearance_section(ui, p, "Density and typography", true, |ui| {
-        let mut density = if app.settings.compact_density { 1usize } else { 0 };
+        let mut density = if app.settings.compact_density {
+            1usize
+        } else {
+            0
+        };
         appearance_inline_row(ui, p, "UI density", 236.0, |ui| {
             if widgets::segmented(ui, &["Default", "Compact"], &mut density, p) {
                 app.settings.compact_density = density == 1;
@@ -2172,14 +2168,8 @@ fn provider_cards(
                 let id = provider.id.clone();
                 response.context_menu(|ui| {
                     ui.set_min_width(196.0);
-                    if widgets::menu_item(
-                        ui,
-                        "Remove from RustChamber",
-                        Some(Icon::Trash),
-                        None,
-                        p,
-                    )
-                    .clicked()
+                    if widgets::menu_item(ui, "Remove from RustChamber", Some(Icon::Trash), None, p)
+                        .clicked()
                     {
                         hidden = Some(id.clone());
                         ui.close();
@@ -2317,7 +2307,11 @@ fn providers(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             }
         }
     }
-    rows.retain(|provider| !hidden.iter().any(|id| id.eq_ignore_ascii_case(&provider.id)));
+    rows.retain(|provider| {
+        !hidden
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(&provider.id))
+    });
     rows.sort_by(|a, b| {
         provider_name(a)
             .to_lowercase()
@@ -2469,8 +2463,7 @@ fn provider_detail(
                 .color(p.fg_muted),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::ghost_button(ui, "Remove from RustChamber", Some(Icon::Trash), p)
-                .clicked()
+            if widgets::ghost_button(ui, "Remove from RustChamber", Some(Icon::Trash), p).clicked()
             {
                 hide = true;
             }
@@ -2835,17 +2828,14 @@ fn card_heading(ui: &mut Ui, p: &Palette, title: &str, description: &str) {
     });
 }
 
-fn card_row(
-    ui: &mut Ui,
-    p: &Palette,
-    label: &str,
-    description: &str,
-    add: impl FnOnce(&mut Ui),
-) {
+fn card_row(ui: &mut Ui, p: &Palette, label: &str, description: &str, add: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
     let top = ui.cursor().top();
-    ui.painter()
-        .hline(ui.cursor().left()..=(ui.cursor().left() + width), top, p.hairline());
+    ui.painter().hline(
+        ui.cursor().left()..=(ui.cursor().left() + width),
+        top,
+        p.hairline(),
+    );
     ui.add_space(12.0);
     let text_width = (width - 128.0).max(80.0);
     ui.horizontal(|ui| {
@@ -2885,9 +2875,9 @@ fn card_row(
 }
 
 fn status_chip(ui: &mut Ui, label: &str, fg: Color32, bg: Color32) {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
     let (rect, _) = ui.allocate_exact_size(
         Vec2::new(galley.size().x + 12.0, theme::TAG_HEIGHT),
         Sense::hover(),
@@ -2935,10 +2925,8 @@ fn quota_meter(ui: &mut Ui, p: &Palette, fraction: f32) {
             ui.painter()
                 .rect_filled(track, CornerRadius::same(3), p.border);
             if lowered > 0.0 {
-                let fill = Rect::from_min_size(
-                    track.min,
-                    Vec2::new((width * lowered).max(3.0), 6.0),
-                );
+                let fill =
+                    Rect::from_min_size(track.min, Vec2::new((width * lowered).max(3.0), 6.0));
                 ui.painter()
                     .rect_filled(fill, CornerRadius::same(3), p.primary);
             }
@@ -3624,7 +3612,7 @@ fn about(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
 
 #[cfg(test)]
 mod tests {
-    use super::{nav_pages, nav_rank, nav_title, shortcut, Group, Section, NAV_WIDTH, PAGES};
+    use super::{Group, NAV_WIDTH, PAGES, Section, nav_pages, nav_rank, nav_title, shortcut};
 
     #[test]
     fn settings_sidebar_uses_the_mock_width() {
@@ -3662,5 +3650,4 @@ mod tests {
         assert_eq!(keys[2], "M");
         assert_ne!(keys[0], keys[1]);
     }
-
 }

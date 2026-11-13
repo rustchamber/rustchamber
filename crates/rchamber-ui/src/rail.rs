@@ -2,8 +2,8 @@ use eframe::egui::{
     self, Align, CornerRadius, Layout, Pos2, Rect, Response, ScrollArea, Sense, Stroke, Ui, Vec2,
 };
 use rchamber_app::Action;
-use rchamber_app::workspace::paths_match;
 use rchamber_app::ProjectEntry;
+use rchamber_app::workspace::paths_match;
 
 use crate::app::{RustChamber, hover_amount};
 use crate::icons::{self, Icon};
@@ -47,7 +47,12 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let mut dragged = ui.data(|data| data.get_temp::<RailPanel>(surface_drag_id()));
     let mut rows: Vec<(RailPanel, Rect)> = Vec::new();
     let mut reorder: Option<(usize, usize)> = None;
-    let bottom_items = 4.0 + if app.updates.available().is_some() { 1.0 } else { 0.0 };
+    let bottom_items = 4.0
+        + if app.updates.available().is_some() {
+            1.0
+        } else {
+            0.0
+        };
     let bottom_room = RAIL_PAD + bottom_items * ITEM + bottom_items * BOTTOM_GAP;
 
     ui.allocate_ui_with_layout(
@@ -123,8 +128,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                         }
                         ui.add_space(ITEM_GAP);
                         for panel in &visible_panels {
-                            let active =
-                                app.ui.context_open && app.ui.surface == panel.surface();
+                            let active = app.ui.context_open && app.ui.surface == panel.surface();
                             let response = surface_item(
                                 ui,
                                 &p,
@@ -156,14 +160,11 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                         {
                             let inside =
                                 rows.first().zip(rows.last()).is_some_and(|(first, last)| {
-                                    pointer.y >= first.1.top()
-                                        && pointer.y <= last.1.bottom()
+                                    pointer.y >= first.1.top() && pointer.y <= last.1.bottom()
                                 });
                             if inside
-                                && let Some(from) =
-                                    rows.iter().position(|row| row.0 == panel)
-                                && let Some(target) =
-                                    rail_drop_target(&rows, from, pointer.y)
+                                && let Some(from) = rows.iter().position(|row| row.0 == panel)
+                                && let Some(target) = rail_drop_target(&rows, from, pointer.y)
                             {
                                 let row = rows[target].1;
                                 let y = if target < from {
@@ -184,10 +185,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 ui.add_space(RAIL_PAD);
                 let settings = icon_item(ui, &p, Icon::Settings, app.ui.show_settings)
-                    .on_hover_text(format!(
-                        "Settings ({})",
-                        widgets::shortcut_label(",")
-                    ));
+                    .on_hover_text(format!("Settings ({})", widgets::shortcut_label(",")));
                 if settings.clicked() {
                     app.open_settings();
                 }
@@ -379,10 +377,7 @@ fn empty_item(ui: &mut Ui, p: &Palette, app: &mut RustChamber) {
         Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
         p.fg_muted.lerp_to_gamma(p.fg, hovered),
     );
-    if response
-        .on_hover_text("Add a project")
-        .clicked()
-    {
+    if response.on_hover_text("Add a project").clicked() {
         app.open_add_project();
     }
 }
@@ -524,9 +519,7 @@ fn extensions_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         return;
     }
     let id = egui::Id::unique("rail-extensions-menu");
-    let mut open = ui
-        .data(|data| data.get_temp::<bool>(id))
-        .unwrap_or(false);
+    let mut open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
     let mut items: Vec<Response> = Vec::new();
     let mut chosen: Option<String> = None;
     crate::app::menu_popup(ui.ctx(), &trigger, id, &mut open, p, 6.0, |ui, _| {
@@ -539,15 +532,8 @@ fn extensions_menu(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             } else {
                 title.clone()
             };
-            let response = crate::widgets::menu_item_ex(
-                ui,
-                &label,
-                Some(*icon),
-                None,
-                selected,
-                true,
-                p,
-            );
+            let response =
+                crate::widgets::menu_item_ex(ui, &label, Some(*icon), None, selected, true, p);
             if response.clicked() {
                 chosen = Some(id.clone());
             }

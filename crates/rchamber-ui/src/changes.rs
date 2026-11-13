@@ -92,9 +92,8 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     let staging = staging_cache(ui, &workspace);
     let session_id = app.model.active_id().map(str::to_string);
     let mode_id = Id::unique(("changes-mode", session_id.clone()));
-    let mode = DiffMode::from_index(
-        ui.memory(|memory| memory.data.get_temp::<u8>(mode_id).unwrap_or(0)),
-    );
+    let mode =
+        DiffMode::from_index(ui.memory(|memory| memory.data.get_temp::<u8>(mode_id).unwrap_or(0)));
     let spin_id = Id::unique(("changes-spin", session_id.clone()));
     let now = ui.input(|input| input.time);
     let spinning = ui
@@ -300,7 +299,8 @@ fn staging_cache(ui: &Ui, workspace: &str) -> Staging {
             staged,
             loaded_at: now,
         };
-        ui.ctx().data_mut(|data| data.insert_temp(id, cache.clone()));
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, cache.clone()));
     }
     cache
 }
@@ -389,7 +389,8 @@ fn workbench_toolbar(
         TOOLBAR_HEIGHT
     };
     let (band, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-    ui.painter().rect_filled(band, CornerRadius::ZERO, p.bg_soft);
+    ui.painter()
+        .rect_filled(band, CornerRadius::ZERO, p.bg_soft);
     ui.painter().hline(
         band.x_range(),
         band.bottom() - theme::HAIRLINE * 0.5,
@@ -584,7 +585,9 @@ fn stage_controls(
             result.discard = true;
         } else {
             ui.memory_mut(|memory| {
-                memory.data.insert_temp(arm_id, ui.input(|input| input.time))
+                memory
+                    .data
+                    .insert_temp(arm_id, ui.input(|input| input.time))
             });
         }
     }
@@ -606,7 +609,10 @@ fn stats_label(ui: &mut Ui, p: &Palette, additions: u32, deletions: u32) {
         p.green,
     );
     ui.painter().galley(
-        egui::Pos2::new(rect.left() + width - removed.size().x, rect.center().y - removed.size().y * 0.5),
+        egui::Pos2::new(
+            rect.left() + width - removed.size().x,
+            rect.center().y - removed.size().y * 0.5,
+        ),
         removed,
         p.red,
     );
@@ -627,7 +633,6 @@ struct DiffCtx<'a> {
     can_stage: bool,
     actions: &'a mut Vec<FileAction>,
 }
-
 
 fn diff_tree_mode(
     ui: &mut Ui,
@@ -833,26 +838,10 @@ fn walk(
             toggles.push((node.path.clone(), !open));
         }
         if open {
-            walk(
-                ui,
-                p,
-                &node.children,
-                files,
-                expanded,
-                diff,
-                toggles,
-            );
+            walk(ui, p, &node.children, files, expanded, diff, toggles);
             for index in &node.files {
                 if let Some(file) = files.get(*index) {
-                    file_block(
-                        ui,
-                        p,
-                        file,
-                        depth + 1,
-                        true,
-                        files.len() == 1,
-                        diff,
-                    );
+                    file_block(ui, p, file, depth + 1, true, files.len() == 1, diff);
                 }
             }
         }
@@ -1081,11 +1070,8 @@ fn file_block(
                 p.scale_alpha(p.selection, 0.35),
             );
         } else if response.hovered() {
-            ui.painter().rect_filled(
-                rect,
-                CornerRadius::same(theme::radius::MD),
-                p.hover,
-            );
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(theme::radius::MD), p.hover);
         }
         icons::paint(
             ui,
@@ -1200,12 +1186,19 @@ fn file_block(
                 Sense::click(),
             );
             if stage.hovered() {
-                ui.painter()
-                    .rect_filled(stage_rect, CornerRadius::same(theme::radius::XS), p.hover);
+                ui.painter().rect_filled(
+                    stage_rect,
+                    CornerRadius::same(theme::radius::XS),
+                    p.hover,
+                );
             }
             icons::paint(
                 ui,
-                if staged { Icon::CheckCheck } else { Icon::Check },
+                if staged {
+                    Icon::CheckCheck
+                } else {
+                    Icon::Check
+                },
                 egui::Rect::from_center_size(stage_rect.center(), Vec2::splat(12.0)),
                 if staged { p.success_text } else { p.fg_muted },
             );
@@ -1234,8 +1227,11 @@ fn file_block(
                 Sense::click(),
             );
             if discard.hovered() {
-                ui.painter()
-                    .rect_filled(discard_rect, CornerRadius::same(theme::radius::XS), p.hover);
+                ui.painter().rect_filled(
+                    discard_rect,
+                    CornerRadius::same(theme::radius::XS),
+                    p.hover,
+                );
             }
             icons::paint(
                 ui,
@@ -1256,7 +1252,9 @@ fn file_block(
                     diff.actions.push(FileAction::Discard(file.file.clone()));
                 } else {
                     ui.memory_mut(|memory| {
-                        memory.data.insert_temp(arm_id, ui.input(|input| input.time))
+                        memory
+                            .data
+                            .insert_temp(arm_id, ui.input(|input| input.time))
                     });
                 }
             }
@@ -1308,7 +1306,16 @@ fn file_block(
         .memory(|memory| memory.data.get_temp::<usize>(limit_id))
         .unwrap_or(PAGE_LINES);
     let total = patch_total(ui.ctx(), &key, &file.patch);
-    patch_view(ui, p, &key, &file.file, &file.patch, limit, staged, diff.mode);
+    patch_view(
+        ui,
+        p,
+        &key,
+        &file.file,
+        &file.patch,
+        limit,
+        staged,
+        diff.mode,
+    );
     if total > limit {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -1388,9 +1395,15 @@ struct Cell {
 #[derive(Clone)]
 enum RowKind {
     Meta(String),
-    Hunk { text: String, raw: String },
+    Hunk {
+        text: String,
+        raw: String,
+    },
     Line(Cell),
-    Split { left: Option<Cell>, right: Option<Cell> },
+    Split {
+        left: Option<Cell>,
+        right: Option<Cell>,
+    },
 }
 
 #[derive(Clone)]
@@ -1464,10 +1477,7 @@ fn intraline(removed: &str, added: &str) -> (Option<(usize, usize)>, Option<(usi
     let removed: Vec<char> = removed.chars().collect();
     let added: Vec<char> = added.chars().collect();
     let mut prefix = 0;
-    while prefix < removed.len()
-        && prefix < added.len()
-        && removed[prefix] == added[prefix]
-    {
+    while prefix < removed.len() && prefix < added.len() && removed[prefix] == added[prefix] {
         prefix += 1;
     }
     let mut suffix = 0;
@@ -1505,13 +1515,7 @@ fn flush_pairs(
     }
     if mode == DiffMode::Split {
         for (left, right) in pairs {
-            rows.push((
-                RowKind::Split {
-                    left,
-                    right,
-                },
-                ROW_HEIGHT,
-            ));
+            rows.push((RowKind::Split { left, right }, ROW_HEIGHT));
         }
     } else {
         for (left, _) in &pairs {
@@ -1639,13 +1643,7 @@ fn build_rows(patch: &str, limit: usize, mode: DiffMode) -> Vec<PatchRow> {
         .collect()
 }
 
-fn patch_rows(
-    ui: &Ui,
-    key: &str,
-    patch: &str,
-    limit: usize,
-    mode: DiffMode,
-) -> Arc<Vec<PatchRow>> {
+fn patch_rows(ui: &Ui, key: &str, patch: &str, limit: usize, mode: DiffMode) -> Arc<Vec<PatchRow>> {
     let id = Id::unique(("patch-rows", key, patch.len(), limit, mode.index()));
     if let Some(rows) = ui
         .ctx()
@@ -1654,8 +1652,7 @@ fn patch_rows(
         return rows;
     }
     let rows = Arc::new(build_rows(patch, limit, mode));
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(id, rows.clone()));
+    ui.ctx().data_mut(|data| data.insert_temp(id, rows.clone()));
     rows
 }
 
@@ -1712,10 +1709,7 @@ fn paint_cell(
     for (index, number) in numbers.iter().enumerate() {
         if let Some(number) = number {
             painter.text(
-                egui::Pos2::new(
-                    origin + NUM_WIDTH * (index + 1) as f32 - 8.0,
-                    center_y,
-                ),
+                egui::Pos2::new(origin + NUM_WIDTH * (index + 1) as f32 - 8.0, center_y),
                 Align2::RIGHT_CENTER,
                 number.to_string(),
                 num_font.clone(),
@@ -1831,17 +1825,18 @@ fn patch_view(
                         );
                         let action_width = if staged { 96.0 } else { 156.0 };
                         let text_width = (width - action_width - 20.0).max(40.0);
-                        painter.with_clip_rect(egui::Rect::from_min_size(
-                            row_rect.min,
-                            Vec2::new(text_width, row_rect.height()),
-                        ))
-                        .text(
-                            egui::Pos2::new(rect.left() + 10.0, row_rect.center().y),
-                            Align2::LEFT_CENTER,
-                            text,
-                            theme::font_mono(11.5),
-                            p.fg_muted,
-                        );
+                        painter
+                            .with_clip_rect(egui::Rect::from_min_size(
+                                row_rect.min,
+                                Vec2::new(text_width, row_rect.height()),
+                            ))
+                            .text(
+                                egui::Pos2::new(rect.left() + 10.0, row_rect.center().y),
+                                Align2::LEFT_CENTER,
+                                text,
+                                theme::font_mono(11.5),
+                                p.fg_muted,
+                            );
                         if staged {
                             painter.text(
                                 egui::Pos2::new(rect.right() - 12.0, row_rect.center().y),
@@ -2131,10 +2126,7 @@ mod tests {
         let removed_chars: Vec<char> = "let a = 1;".chars().collect();
         let added_chars: Vec<char> = "let a = 2;".chars().collect();
         let (start, end) = removed.expect("removed span");
-        assert_eq!(
-            removed_chars[start..end].iter().collect::<String>(),
-            "1"
-        );
+        assert_eq!(removed_chars[start..end].iter().collect::<String>(), "1");
         let (start, end) = added.expect("added span");
         assert_eq!(added_chars[start..end].iter().collect::<String>(), "2");
     }

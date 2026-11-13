@@ -1,6 +1,6 @@
 use eframe::egui::{
-    self, Color32, CornerRadius, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle, Ui, Vec2,
-    WidgetText,
+    self, Color32, CornerRadius, Pos2, Rect, Response, RichText, Sense, Stroke, TextStyle, Ui,
+    Vec2, WidgetText,
 };
 use rchamber_api::models::Message;
 use rchamber_app::format::money;
@@ -156,9 +156,7 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
             .as_ref()
             .and_then(|chat| chat.session.directory())
             .is_some();
-    let extras = usage_room
-        + if project_button { BUTTON } else { 0.0 }
-        + ACTION_GAP;
+    let extras = usage_room + if project_button { BUTTON } else { 0.0 } + ACTION_GAP;
     let show_extras = cluster_left - extras > left + TITLE_ROOM_MIN;
     if show_extras {
         let mut cursor = cluster_left;
@@ -206,8 +204,9 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
     } else {
         chip_room += CHIP_GAP + tag_width(ui, "Local-first workspace");
     }
-    let room =
-        (cluster_left - left - ACTION_GAP * 1.5 - chip_room).max(40.0).min(520.0);
+    let room = (cluster_left - left - ACTION_GAP * 1.5 - chip_room)
+        .max(40.0)
+        .min(520.0);
     let title_galley = elide(ui, title, theme::font_semibold(TITLE_SIZE), p.fg, room);
     let title_end = left + title_galley.size().x;
 
@@ -379,11 +378,9 @@ fn paint_tab(ui: &mut Ui, p: &Palette, rect: Rect, spec: &TabSpec, active: bool)
         );
         x += DOT + 5.0;
     }
-    let galley = ui.painter().layout_no_wrap(
-        spec.label.to_string(),
-        theme::font_medium(TAB_FONT),
-        color,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(spec.label.to_string(), theme::font_medium(TAB_FONT), color);
     ui.painter().galley(
         Pos2::new(x, rect.center().y - galley.size().y * 0.5),
         galley.clone(),
@@ -392,9 +389,11 @@ fn paint_tab(ui: &mut Ui, p: &Palette, rect: Rect, spec: &TabSpec, active: bool)
     x += galley.size().x;
     if spec.count > 0 {
         let count = spec.count.to_string();
-        let galley = ui
-            .painter()
-            .layout_no_wrap(count.clone(), theme::font_mono(theme::TEXT_TAG), p.fg_muted);
+        let galley = ui.painter().layout_no_wrap(
+            count.clone(),
+            theme::font_mono(theme::TEXT_TAG),
+            p.fg_muted,
+        );
         let chip = Rect::from_min_size(
             Pos2::new(x + 6.0, rect.center().y - theme::TAG_HEIGHT * 0.5),
             Vec2::new(galley.size().x + 10.0, theme::TAG_HEIGHT),
@@ -425,11 +424,9 @@ fn tag_width(ui: &Ui, label: &str) -> f32 {
 fn paint_tag(ui: &Ui, rect: Rect, label: &str, fg: Color32, bg: Color32) {
     ui.painter()
         .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        theme::font_mono(theme::TEXT_TAG),
-        fg,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
     ui.painter().galley(
         Pos2::new(
             rect.center().x - galley.size().x * 0.5,

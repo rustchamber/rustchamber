@@ -116,16 +116,11 @@ pub fn show(ui: &mut Ui, id: egui::Id, p: &Palette) {
                     }
                 };
                 if let Some(icon) = icon {
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                    let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
                     icons::paint(ui, icon, icon_rect, ink);
                 }
                 ui.add_space(2.0);
-                ui.label(
-                    RichText::new(label)
-                        .font(theme::font_mono(11.5))
-                        .color(ink),
-                );
+                ui.label(RichText::new(label).font(theme::font_mono(11.5)).color(ink));
                 if !state.running {
                     match state.status {
                         Some(code) if code != 0 => {

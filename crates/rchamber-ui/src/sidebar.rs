@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-
 use eframe::egui::{
     self, Align, CornerRadius, Layout, Rect, RichText, ScrollArea, Sense, Stroke, TextStyle, Ui,
     Vec2, WidgetText,
@@ -295,15 +294,8 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                         .collapsed_sections
                         .contains("in_progress");
                     let label = format!("In progress ({})", in_progress.len());
-                    let (toggle, _, _) = section_header(
-                        ui,
-                        &p,
-                        "in_progress",
-                        &label,
-                        collapsed,
-                        false,
-                        false,
-                    );
+                    let (toggle, _, _) =
+                        section_header(ui, &p, "in_progress", &label, collapsed, false, false);
                     if toggle {
                         toggle_section(app, "in_progress");
                     }
@@ -570,7 +562,14 @@ fn header(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             Stroke::new(theme::BORDER, p.border),
         );
         let mut right = rect.right() - HEADER_PAD_X;
-        let plus = header_action(ui, p, rect.center().y, &mut right, Icon::Plus, "new-session");
+        let plus = header_action(
+            ui,
+            p,
+            rect.center().y,
+            &mut right,
+            Icon::Plus,
+            "new-session",
+        );
         if plus
             .on_hover_text(format!(
                 "New session ({})",
@@ -660,7 +659,11 @@ fn header_action(
         Vec2::splat(ACTION),
     );
     *right -= ACTION + 4.0;
-    let response = ui.interact(rect, egui::Id::unique(("sidebar-action", id)), Sense::click());
+    let response = ui.interact(
+        rect,
+        egui::Id::unique(("sidebar-action", id)),
+        Sense::click(),
+    );
     crate::widgets::pointer(ui, &response);
     let hovered = hover_amount(ui.ctx(), response.id.with("hover"), response.hovered());
     if hovered > 0.01 {
@@ -719,9 +722,9 @@ fn tag_width(ui: &Ui, label: &str) -> f32 {
 fn paint_tag(ui: &Ui, rect: Rect, label: &str, fg: egui::Color32, bg: egui::Color32) {
     ui.painter()
         .rect_filled(rect, CornerRadius::same(theme::radius::XS), bg);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), theme::font_mono(theme::TEXT_TAG), fg);
     ui.painter().galley(
         egui::Pos2::new(
             rect.center().x - galley.size().x * 0.5,
@@ -768,7 +771,13 @@ fn read_branch(start: &std::path::Path) -> Option<String> {
             let head = head.trim();
             if let Some(reference) = head.strip_prefix("ref:") {
                 let reference = reference.trim();
-                return Some(reference.rsplit('/').next().unwrap_or(reference).to_string());
+                return Some(
+                    reference
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(reference)
+                        .to_string(),
+                );
             }
             if !head.is_empty() {
                 return Some(head.chars().take(7).collect());
@@ -966,7 +975,11 @@ fn search_row(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                 corner,
                 Stroke::new(
                     theme::BORDER,
-                    if focused { p.border_focus } else { p.tool_border },
+                    if focused {
+                        p.border_focus
+                    } else {
+                        p.tool_border
+                    },
                 ),
                 egui::StrokeKind::Inside,
             );
@@ -1791,11 +1804,9 @@ fn section_header(
             if add_hovered { p.fg } else { p.fg_faint },
         );
     }
-    let galley = ui.painter().layout_no_wrap(
-        label.to_uppercase(),
-        theme::font_mono(11.0),
-        p.fg_muted,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_uppercase(), theme::font_mono(11.0), p.fg_muted);
     let left = slot.left() + SECTION_LABEL_INSET;
     ui.painter().galley(
         egui::Pos2::new(left, slot.center().y - galley.size().y * 0.5),
@@ -2069,8 +2080,7 @@ fn session_row(
             p.coral,
         );
     } else if running {
-        ui.painter()
-            .circle_filled(state_center, 3.5, p.primary);
+        ui.painter().circle_filled(state_center, 3.5, p.primary);
     } else if session.outcome == Some(Outcome::Failed) {
         ui.painter().circle_filled(state_center, 3.0, p.red);
     } else if unread {
@@ -3162,11 +3172,7 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         rect.top() + theme::BORDER * 0.5,
         Stroke::new(theme::BORDER, p.border),
     );
-    let response = ui.interact(
-        rect,
-        egui::Id::unique("sidebar-footer"),
-        Sense::hover(),
-    );
+    let response = ui.interact(rect, egui::Id::unique("sidebar-footer"), Sense::hover());
     let (color, status) = match &app.model.connection {
         Connection::Ready => (p.green, "Local"),
         Connection::Connecting => (p.primary, "Starting"),
@@ -3191,11 +3197,8 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     );
     crate::widgets::pointer(ui, &pill);
     if pill.hovered() {
-        ui.painter().rect_filled(
-            pill_rect,
-            CornerRadius::same(theme::radius::SM),
-            p.hover,
-        );
+        ui.painter()
+            .rect_filled(pill_rect, CornerRadius::same(theme::radius::SM), p.hover);
     }
     icons::paint(
         ui,
@@ -3263,14 +3266,9 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                     .color(p.fg_faint),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let refresh = crate::widgets::icon_button_hit(
-                    ui,
-                    Icon::Refresh,
-                    13.0,
-                    24.0,
-                    p.fg_muted,
-                )
-                .on_hover_text("Reconnect");
+                let refresh =
+                    crate::widgets::icon_button_hit(ui, Icon::Refresh, 13.0, 24.0, p.fg_muted)
+                        .on_hover_text("Reconnect");
                 if refresh.clicked() {
                     app.apply_connection_settings();
                 }
@@ -3292,22 +3290,10 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                     );
                     crate::widgets::tag_chip(ui, "Current", p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        crate::widgets::icon_button_hit(
-                            ui,
-                            Icon::Layers,
-                            14.0,
-                            24.0,
-                            p.fg_muted,
-                        )
-                        .on_hover_text("Local server");
-                        crate::widgets::icon_button_hit(
-                            ui,
-                            Icon::Pin,
-                            14.0,
-                            24.0,
-                            p.primary,
-                        )
-                        .on_hover_text("Default instance");
+                        crate::widgets::icon_button_hit(ui, Icon::Layers, 14.0, 24.0, p.fg_muted)
+                            .on_hover_text("Local server");
+                        crate::widgets::icon_button_hit(ui, Icon::Pin, 14.0, 24.0, p.primary)
+                            .on_hover_text("Default instance");
                     });
                 });
                 ui.horizontal(|ui| {
@@ -3324,11 +3310,13 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                             status
                         })
                         .font(theme::font(theme::TEXT_META))
-                        .color(if matches!(app.model.connection, Connection::Ready) {
-                            p.green
-                        } else {
-                            p.fg_muted
-                        }),
+                        .color(
+                            if matches!(app.model.connection, Connection::Ready) {
+                                p.green
+                            } else {
+                                p.fg_muted
+                            },
+                        ),
                     );
                 });
                 ui.label(
@@ -3337,17 +3325,12 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                         .color(p.fg_muted),
                 );
             });
-        let (row, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 30.0),
-            Sense::click(),
-        );
+        let (row, response) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
         crate::widgets::pointer(ui, &response);
         if response.hovered() {
-            ui.painter().rect_filled(
-                row,
-                CornerRadius::same(theme::radius::SM),
-                p.hover,
-            );
+            ui.painter()
+                .rect_filled(row, CornerRadius::same(theme::radius::SM), p.hover);
         }
         icons::paint(
             ui,
@@ -3369,11 +3352,8 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             egui::Pos2::new(row.right() - 92.0, row.center().y - 9.0),
             Vec2::new(80.0, 18.0),
         );
-        ui.painter().rect_filled(
-            chip,
-            CornerRadius::same(theme::radius::XS),
-            p.tag_bg,
-        );
+        ui.painter()
+            .rect_filled(chip, CornerRadius::same(theme::radius::XS), p.tag_bg);
         ui.painter().text(
             chip.center(),
             egui::Align2::CENTER_CENTER,
@@ -3381,7 +3361,10 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             theme::font_mono(10.0),
             p.fg_faint,
         );
-        if response.on_hover_text("Remote instances are not available yet").clicked() {
+        if response
+            .on_hover_text("Remote instances are not available yet")
+            .clicked()
+        {
             add_instance = true;
         }
     });
@@ -3392,7 +3375,6 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     }
     ui.data_mut(|data| data.insert_temp(popup_id, open));
 }
-
 
 fn grouping_label(grouping: SessionGrouping) -> &'static str {
     match grouping {

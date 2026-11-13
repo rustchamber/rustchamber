@@ -104,10 +104,7 @@ pub fn header_drag(ui: &mut Ui, right_limit: f32, block: Rect) {
             egui::Pos2::new((block.left() - gap).max(rect.left()), rect.bottom()),
         ),
         Rect::from_min_max(
-            egui::Pos2::new(
-                (block.right() + gap).min(rect.right()),
-                rect.top(),
-            ),
+            egui::Pos2::new((block.right() + gap).min(rect.right()), rect.top()),
             rect.max,
         ),
     ];

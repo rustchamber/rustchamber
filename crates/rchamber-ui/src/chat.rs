@@ -1466,11 +1466,9 @@ fn file_chip(ui: &mut Ui, p: &Palette, file: &Attachment) {
         .or_else(|| file.path.clone())
         .unwrap_or_else(|| "attachment".into());
     let font = theme::font_mono(theme::TEXT_MICRO);
-    let galley = ui.painter().layout_no_wrap(
-        format!("@{}", shorten(&name, 40)),
-        font,
-        p.primary_text,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(format!("@{}", shorten(&name, 40)), font, p.primary_text);
     let width = 8.0 + 12.0 + 5.0 + galley.size().x + 5.0 + 10.0 + 7.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::hover());
     ui.painter()
@@ -1599,10 +1597,7 @@ fn message_footer(
                 p.fg_muted.gamma_multiply(reveal)
             },
         );
-        if response
-            .on_hover_text("Copy the answer")
-            .clicked()
-        {
+        if response.on_hover_text("Copy the answer").clicked() {
             let text = turn_text(turn);
             if !text.is_empty() {
                 ui.ctx().copy_text(text);
@@ -1937,8 +1932,10 @@ fn reasoning_row(
         label.push_str(&summary);
     }
 
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), REASONING_ROW), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), REASONING_ROW),
+        Sense::click(),
+    );
     let center = rect.center().y;
     icons::paint(
         ui,
@@ -1952,9 +1949,9 @@ fn reasoning_row(
     );
     let mut x = rect.left() + 12.0 + 6.0;
     if streaming {
-        let galley =
-            ui.painter()
-                .layout_no_wrap(label, theme::font(12.5), p.fg_muted);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label, theme::font(12.5), p.fg_muted);
         let width = galley.size().x;
         ui.painter().galley(
             Pos2::new(x, center - galley.size().y * 0.5),
@@ -2775,12 +2772,7 @@ fn tool_row(
                 .map(extension_icon)
                 .unwrap_or_else(|| tool_icon(&tool.name)),
             icon_rect,
-            if error {
-                p.error_text
-            } else {
-                p.tool_icon
-            }
-            .gamma_multiply(1.0 - hover),
+            if error { p.error_text } else { p.tool_icon }.gamma_multiply(1.0 - hover),
         );
     }
     if hover > 0.001 || open {
@@ -2792,12 +2784,11 @@ fn tool_row(
                 Icon::ChevronRight
             },
             icon_rect,
-            if error {
-                p.error_text
+            if error { p.error_text } else { p.tool_icon }.gamma_multiply(if open {
+                1.0
             } else {
-                p.tool_icon
-            }
-            .gamma_multiply(if open { 1.0 } else { hover }),
+                hover
+            }),
         );
     }
 
@@ -2844,11 +2835,9 @@ fn tool_row(
     let mut right = check.left() - 6.0;
     let mono = theme::font_mono(11.5);
     if additions + deletions > 0 {
-        let dels = ui.painter().layout_no_wrap(
-            format!("-{deletions}"),
-            mono.clone(),
-            p.diff_removed,
-        );
+        let dels =
+            ui.painter()
+                .layout_no_wrap(format!("-{deletions}"), mono.clone(), p.diff_removed);
         right -= dels.size().x;
         ui.painter().galley(
             Pos2::new(right, center - dels.size().y * 0.5),
@@ -2856,9 +2845,9 @@ fn tool_row(
             p.diff_removed,
         );
         right -= 4.0;
-        let adds =
-            ui.painter()
-                .layout_no_wrap(format!("+{additions}"), mono.clone(), p.diff_added);
+        let adds = ui
+            .painter()
+            .layout_no_wrap(format!("+{additions}"), mono.clone(), p.diff_added);
         right -= adds.size().x;
         ui.painter().galley(
             Pos2::new(right, center - adds.size().y * 0.5),
@@ -2874,9 +2863,9 @@ fn tool_row(
         } else {
             p.tool_description
         };
-        let galley =
-            ui.painter()
-                .layout_no_wrap(duration_text.clone(), mono.clone(), color);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(duration_text.clone(), mono.clone(), color);
         right -= galley.size().x;
         ui.painter().galley(
             Pos2::new(right, center - galley.size().y * 0.5),
@@ -2924,7 +2913,11 @@ fn tool_row(
             ui,
             &description,
             theme::font_mono(theme::TEXT_MICRO),
-            if error { p.error_text } else { p.tool_description },
+            if error {
+                p.error_text
+            } else {
+                p.tool_description
+            },
             right - start,
         );
         ui.painter()
@@ -3492,7 +3485,10 @@ fn permission_cwd(request: &rchamber_api::models::PermissionRequest) -> Option<S
         .map(str::to_string)
 }
 
-fn permission_tag(request: &rchamber_api::models::PermissionRequest, command: Option<&str>) -> String {
+fn permission_tag(
+    request: &rchamber_api::models::PermissionRequest,
+    command: Option<&str>,
+) -> String {
     if !request.action.trim().is_empty() {
         return request.action.trim().to_ascii_lowercase();
     }
@@ -3509,13 +3505,7 @@ pub(crate) enum ApprovalKind {
     Danger,
 }
 
-fn approval_button(
-    ui: &mut Ui,
-    p: &Palette,
-    label: &str,
-    hint: &str,
-    kind: ApprovalKind,
-) -> bool {
+fn approval_button(ui: &mut Ui, p: &Palette, label: &str, hint: &str, kind: ApprovalKind) -> bool {
     let font = theme::font_medium(theme::TEXT_BUTTON);
     let galley = ui
         .painter()
@@ -3526,10 +3516,8 @@ fn approval_button(
         Color32::PLACEHOLDER,
     );
     let width = 10.0 + galley.size().x + 6.0 + hint_galley.size().x + 8.0 + 10.0;
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(width, theme::BUTTON_HEIGHT),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, theme::BUTTON_HEIGHT), Sense::click());
     crate::widgets::pointer(ui, &response);
     let (fill, border, ink) = match kind {
         ApprovalKind::Primary => (p.primary, Color32::TRANSPARENT, p.on_primary),
@@ -3576,11 +3564,8 @@ fn approval_button(
         ),
         Vec2::new(hint_galley.size().x + 8.0, 15.0),
     );
-    ui.painter().rect_filled(
-        hint_rect,
-        CornerRadius::same(3),
-        p.alpha(ink, 22),
-    );
+    ui.painter()
+        .rect_filled(hint_rect, CornerRadius::same(3), p.alpha(ink, 22));
     ui.painter().galley(
         Pos2::new(
             hint_rect.center().x - hint_galley.size().x * 0.5,
@@ -3621,7 +3606,10 @@ pub(crate) fn approval_card(
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
             let (icon, _) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::hover());
             icons::paint(ui, Icon::Shield, icon, p.warning_text);
-            let mut title = format!("Permission required · {}", permission_title(&request.action));
+            let mut title = format!(
+                "Permission required · {}",
+                permission_title(&request.action)
+            );
             if total > 1 {
                 title.push_str(&format!(" ({}/{total})", index + 1));
             }
@@ -3669,8 +3657,10 @@ pub(crate) fn approval_card(
                         p.fg,
                         text_max,
                     );
-                    let (rect, _) = ui
-                        .allocate_exact_size(Vec2::new(inner, galley.size().y.max(18.0)), Sense::hover());
+                    let (rect, _) = ui.allocate_exact_size(
+                        Vec2::new(inner, galley.size().y.max(18.0)),
+                        Sense::hover(),
+                    );
                     ui.painter().galley(
                         Pos2::new(rect.left(), rect.center().y - galley.size().y * 0.5),
                         galley,
@@ -3680,11 +3670,8 @@ pub(crate) fn approval_card(
                         Pos2::new(rect.right() - tag_width * 0.5, rect.center().y),
                         Vec2::new(tag_width, theme::TAG_HEIGHT),
                     );
-                    ui.painter().rect_filled(
-                        chip,
-                        CornerRadius::same(theme::radius::XS),
-                        p.tag_bg,
-                    );
+                    ui.painter()
+                        .rect_filled(chip, CornerRadius::same(theme::radius::XS), p.tag_bg);
                     ui.painter().galley(
                         Pos2::new(
                             chip.center().x - tag_galley.size().x * 0.5,

@@ -2364,10 +2364,8 @@ fn code_action_button(ui: &mut Ui, label: &str, primary: bool, p: &Palette) -> e
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(galley.size().x + 16.0, 22.0),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(galley.size().x + 16.0, 22.0), Sense::click());
     crate::widgets::pointer(ui, &response);
     let (fill, border, ink) = if primary {
         (

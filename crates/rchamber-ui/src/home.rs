@@ -1247,12 +1247,7 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
     let center_x = area.center().x;
     let title_font = theme::font_semibold(theme::TEXT_PAGE_TITLE);
     let body_font = theme::font(theme::TEXT_UI_LABEL);
-    let title_lines = wrap_words(
-        ui,
-        "Open a project to start a session",
-        &title_font,
-        width,
-    );
+    let title_lines = wrap_words(ui, "Open a project to start a session", &title_font, width);
     let body_lines = wrap_words(
         ui,
         "RustChamber keeps projects explicit. Pick a local repository, clone from a Git URL, or import existing workspaces from OpenCode. Nothing leaves your machine.",
@@ -1277,39 +1272,32 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
     let mut body_gap = 28.0;
     let mut tile_height = TILE_HEIGHT;
     let mut tiles_height = rows * tile_height + (rows - 1.0) * TILE_GAP;
-    let mut total = logo
-        + top_gap
-        + title_height
-        + 6.0
-        + body_height
-        + body_gap
-        + tiles_height;
+    let mut total = logo + top_gap + title_height + 6.0 + body_height + body_gap + tiles_height;
     if total + 48.0 > area.height() {
         logo = 40.0;
         top_gap = 10.0;
         body_gap = 16.0;
         tile_height = 90.0;
         tiles_height = rows * tile_height + (rows - 1.0) * TILE_GAP;
-        total = logo
-            + top_gap
-            + title_height
-            + 6.0
-            + body_height
-            + body_gap
-            + tiles_height;
+        total = logo + top_gap + title_height + 6.0 + body_height + body_gap + tiles_height;
     }
     let mut y = area.top() + ((area.height() - total) * 0.5).max(16.0);
 
-    let logo_rect = Rect::from_center_size(
-        Pos2::new(center_x, y + logo * 0.5),
-        Vec2::splat(logo),
-    );
+    let logo_rect = Rect::from_center_size(Pos2::new(center_x, y + logo * 0.5), Vec2::splat(logo));
     logo::paint(ui.painter(), logo_rect, p.fade(p.fg, 0.45));
     y += logo + top_gap;
 
     paint_centered(ui, &title_lines, title_font, p.fg, center_x, y, TITLE_LINE);
     y += title_height + 6.0;
-    paint_centered(ui, &body_lines, body_font, p.fg_muted, center_x, y, BODY_LINE);
+    paint_centered(
+        ui,
+        &body_lines,
+        body_font,
+        p.fg_muted,
+        center_x,
+        y,
+        BODY_LINE,
+    );
     y += body_height + body_gap;
 
     let tiles = [
@@ -1344,11 +1332,7 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
             ),
             Vec2::new(tile_width, tile_height),
         );
-        let response = ui.interact(
-            rect,
-            Id::unique(("home/onboard", index)),
-            Sense::click(),
-        );
+        let response = ui.interact(rect, Id::unique(("home/onboard", index)), Sense::click());
         crate::widgets::pointer(ui, &response);
         let hovered = motion::hover_fade(ui, response.id.with("hover"), response.hovered());
         ui.painter().rect_filled(
@@ -1359,10 +1343,7 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(theme::radius::PANEL),
-            Stroke::new(
-                theme::BORDER,
-                p.mix(p.border, p.accent_border, hovered),
-            ),
+            Stroke::new(theme::BORDER, p.mix(p.border, p.accent_border, hovered)),
             StrokeKind::Inside,
         );
         let hint_galley = ui.painter().layout_no_wrap(
@@ -1377,8 +1358,7 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
             ),
             Vec2::new(hint_galley.size().x + 12.0, theme::TAG_HEIGHT),
         );
-        let label_room =
-            (hint_rect.left() - 8.0 - (rect.left() + TILE_PAD)).max(24.0);
+        let label_room = (hint_rect.left() - 8.0 - (rect.left() + TILE_PAD)).max(24.0);
         let full_label = ui.painter().layout_no_wrap(
             (*label).to_string(),
             theme::font_semibold(theme::TEXT_UI_LABEL),
@@ -1404,11 +1384,8 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
             label_galley,
             p.fg,
         );
-        ui.painter().rect_filled(
-            hint_rect,
-            CornerRadius::same(theme::radius::XS),
-            p.tag_bg,
-        );
+        ui.painter()
+            .rect_filled(hint_rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
         ui.painter().galley(
             Pos2::new(
                 hint_rect.center().x - hint_galley.size().x * 0.5,

@@ -1738,7 +1738,9 @@ fn toolbar(
                     .insert_temp(Id::unique("files-find-open"), !open)
             });
         }
-        if plan.mode && let Some(mode) = mode_toggle(ui, p, preview) {
+        if plan.mode
+            && let Some(mode) = mode_toggle(ui, p, preview)
+        {
             set_preview_mode(ctx, active, mode);
         }
         if plan.export
@@ -1821,9 +1823,9 @@ fn toolbar_chip(
     tip: &str,
 ) -> Response {
     let font = theme::font_medium(12.0);
-    let measured = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
+    let measured =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER);
     let width = (measured.size().x + 18.0).min(ui.available_width().max(44.0));
     let text_room = (width - 18.0).max(0.0);
     let galley = if measured.size().x > text_room {
