@@ -14,6 +14,7 @@ use crate::action::{
     Action, BackendEvent, Connection, ExecutionState, LaunchConfig, LiveEvent, ToastKind,
     TrackedProject,
 };
+use crate::connections::{ConnectionDraft, ConnectionKind, ConnectionsStore, SavedConnection};
 use crate::extensions::{BridgeMessage, ExtensionHost};
 use crate::live;
 use crate::snippets;
@@ -132,7 +133,8 @@ struct Inner {
     config: LaunchConfig,
     client: Option<Client>,
     server: Option<ServerHandle>,
-    password: Option<String>,
+    ssh_directory: Option<String>,
+    connections: ConnectionsStore,
     active: Option<String>,
     subscription: Option<rchamber_api::Subscription>,
     cursors: HashMap<String, Option<String>>,
@@ -145,6 +147,7 @@ struct Inner {
     tracked: Vec<TrackedProject>,
     cached_sessions: HashMap<String, Vec<Session>>,
     next_flush: Option<Instant>,
+    next_tunnel_check: Option<Instant>,
     extensions: ExtensionHost,
     next_extension_status: Option<Instant>,
     extension_status_due: HashMap<String, Instant>,
@@ -160,13 +163,15 @@ enum Control {
 
 impl Inner {
     fn new(config: LaunchConfig, tx: UnboundedSender<BackendEvent>, wake: Wake) -> Self {
+        let ssh_directory = config.ssh_directory.clone();
         Self {
             tx,
             wake,
             config,
             client: None,
             server: None,
-            password: None,
+            ssh_directory,
+            connections: ConnectionsStore::load(),
             active: None,
             subscription: None,
             cursors: HashMap::new(),
@@ -179,6 +184,7 @@ impl Inner {
             tracked: Vec::new(),
             cached_sessions: HashMap::new(),
             next_flush: None,
+            next_tunnel_check: None,
             extensions: {
                 let mut extensions = ExtensionHost::new(rchamber_ext::default_root());
                 extensions.set_context(HostContext {
@@ -197,6 +203,7 @@ impl Inner {
     }
 
     async fn run(&mut self, mut actions: UnboundedReceiver<Action>) {
+        self.emit_connections();
         self.emit(BackendEvent::Extensions(self.extensions.catalog()));
         loop {
             self.connect().await;
@@ -208,14 +215,11 @@ impl Inner {
                     action = actions.recv() => {
                         match action {
                             Some(Action::Shutdown) | None => return,
-                            Some(Action::Reconnect) => {
-                                break;
-                            }
-                            Some(action) => {
-                                if matches!(self.handle(action).await, Control::Exit) {
-                                    return;
-                                }
-                            }
+                            Some(action) => match self.handle(action).await {
+                                Control::Exit => return,
+                                Control::Reconnect => break,
+                                Control::Continue => {}
+                            },
                         }
                     }
                     raw = async {
@@ -230,6 +234,15 @@ impl Inner {
                     }
                     _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                         self.flush().await;
+                    }
+                    _ = tokio::time::sleep_until(self.next_tunnel_check.unwrap_or_else(Instant::now)), if self.next_tunnel_check.is_some() => {
+                        if self.server.as_mut().is_some_and(ServerHandle::ssh_exited) {
+                            self.emit(BackendEvent::Connection(Connection::Failed(
+                                "The SSH tunnel closed. Reconnecting…".into(),
+                            )));
+                            break;
+                        }
+                        self.next_tunnel_check = Some(Instant::now() + Duration::from_secs(1));
                     }
                     Some(event) = self.extensions.events.recv() => {
                         if let Some(event) = self.extensions.worker_event(event) {
@@ -254,18 +267,31 @@ impl Inner {
 
     async fn connect(&mut self) {
         self.emit(BackendEvent::Connection(Connection::Connecting));
-        let options = LaunchOptions {
-            directory: self.config.workspace.as_ref().map(std::path::PathBuf::from),
-            binary: None,
-            port: None,
-            password: self.config.password.clone(),
-            external_url: self.config.endpoint.clone(),
+        let result = if let Some(target) = self.config.ssh.clone() {
+            rchamber_api::ssh::launch(rchamber_api::SshLaunchOptions {
+                target,
+                directory: self.ssh_directory.clone(),
+            })
+            .await
+        } else {
+            let options = LaunchOptions {
+                directory: self.config.workspace.as_ref().map(std::path::PathBuf::from),
+                binary: None,
+                port: None,
+                password: self.config.password.clone(),
+                external_url: self.config.endpoint.clone(),
+            };
+            rchamber_api::launch(options).await
         };
-        match rchamber_api::launch(options).await {
+        match result {
             Ok(handle) => {
-                self.password = handle.password.clone();
                 self.client = Some(handle.client.clone());
                 self.server = Some(handle);
+                self.next_tunnel_check = self
+                    .config
+                    .ssh
+                    .is_some()
+                    .then(|| Instant::now() + Duration::from_secs(1));
                 self.emit(BackendEvent::Connection(Connection::Ready));
                 self.sync_extension_context();
                 self.extensions.ensure_workers();
@@ -282,6 +308,7 @@ impl Inner {
             Err(err) => {
                 self.client = None;
                 self.server = None;
+                self.next_tunnel_check = None;
                 self.emit(BackendEvent::Connection(Connection::Failed(
                     err.to_string(),
                 )));
@@ -297,6 +324,7 @@ impl Inner {
         self.cursors.clear();
         self.pending_mcp = false;
         self.mcp_attempts = 0;
+        self.next_tunnel_check = None;
     }
 
     async fn bootstrap(&mut self) {
@@ -352,7 +380,10 @@ impl Inner {
             Err(err) => self.error("Could not load commands", err),
         }
         match projects {
-            Ok(projects) => self.emit(BackendEvent::Projects(projects)),
+            Ok(projects) => self.emit(BackendEvent::Projects {
+                connection: self.connections.active_id().map(str::to_string),
+                projects,
+            }),
             Err(err) => self.error("Could not load projects", err),
         }
         match vcs {
@@ -367,7 +398,7 @@ impl Inner {
         }
         self.load_mcp(&client).await;
         self.reload_snippets(client.directory());
-        if !self.tracked.is_empty() {
+        if self.config.ssh.is_some() || !self.tracked.is_empty() {
             self.refresh_sessions(&client).await;
         }
     }
@@ -391,6 +422,87 @@ impl Inner {
             if let Some(client) = self.client.clone() {
                 self.refresh_sessions(&client).await;
             }
+            return Control::Continue;
+        }
+        if let Action::ConnectServer { id } = &action {
+            self.connections = ConnectionsStore::load();
+            let target = id
+                .as_ref()
+                .and_then(|id| self.connections.find(id).cloned());
+            if id.is_some() && target.is_none() {
+                self.emit(BackendEvent::Toast {
+                    kind: ToastKind::Error,
+                    message: "That server connection no longer exists.".into(),
+                });
+                return Control::Continue;
+            }
+            match target {
+                Some(connection) => self.use_connection(&connection),
+                None => {
+                    self.config.ssh = None;
+                    self.config.endpoint = None;
+                    self.config.password = None;
+                    self.ssh_directory = None;
+                }
+            }
+            self.connections
+                .set_active(id.clone(), crate::state::now_ms());
+            self.save_connections();
+            self.emit_connections();
+            return Control::Reconnect;
+        }
+        if let Action::SaveConnection { draft } = &action {
+            if let Err(message) = validate_connection_draft(draft) {
+                self.emit(BackendEvent::Toast {
+                    kind: ToastKind::Error,
+                    message,
+                });
+                return Control::Continue;
+            }
+            self.connections = ConnectionsStore::load();
+            if let Some(id) = draft.id.as_deref()
+                && self.connections.find(id).is_none()
+            {
+                self.emit(BackendEvent::Toast {
+                    kind: ToastKind::Error,
+                    message: "That server connection no longer exists.".into(),
+                });
+                return Control::Continue;
+            }
+            let active = self.connections.active_id().map(str::to_string);
+            let id = self
+                .connections
+                .upsert(draft.clone(), crate::state::now_ms());
+            if !self.save_connections() {
+                self.connections = ConnectionsStore::load();
+                self.emit_connections();
+                return Control::Continue;
+            }
+            self.emit_connections();
+            self.emit(BackendEvent::Toast {
+                kind: ToastKind::Success,
+                message: "Server connection saved.".into(),
+            });
+            let editing_active = active.as_deref() == Some(id.as_str());
+            if editing_active && let Some(connection) = self.connections.find(&id).cloned() {
+                self.use_connection(&connection);
+                self.connections
+                    .set_active(Some(id), crate::state::now_ms());
+                self.save_connections();
+                self.emit_connections();
+                return Control::Reconnect;
+            }
+            return Control::Continue;
+        }
+        if let Action::DeleteConnection { id } = &action {
+            self.connections = ConnectionsStore::load();
+            self.connections.remove(id);
+            if !self.save_connections() {
+                self.connections = ConnectionsStore::load();
+                self.emit_connections();
+                return Control::Continue;
+            }
+            self.emit_connections();
             return Control::Continue;
         }
         if let Some(control) = self.handle_extension_action(&action).await {
@@ -427,6 +539,7 @@ impl Inner {
                 agent,
                 allow_all,
             } => {
+                let directory = self.ssh_directory.clone().unwrap_or(directory);
                 let permissions = allow_all.then(|| {
                     serde_json::json!([
                         { "action": "*", "resource": "*", "effect": "allow" }
@@ -457,7 +570,9 @@ impl Inner {
                                 .await;
                         }
                     }
-                    Err(err) => self.error("Could not create session", err),
+                    Err(err) => {
+                        self.error("Could not create session", remote_error(&directory, err))
+                    }
                 }
             }
             Action::Send {
@@ -666,6 +781,13 @@ impl Inner {
                 Err(err) => self.error("Could not answer permission", err),
             },
             Action::SetWorkspace(directory) => {
+                if self.config.ssh.is_some() {
+                    self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Info,
+                        message: "Edit the SSH connection to change its remote folder.".into(),
+                    });
+                    return Control::Continue;
+                }
                 self.config.workspace = Some(directory.clone());
                 let mut next = client.clone();
                 next.set_directory(Some(directory.clone()));
@@ -674,7 +796,10 @@ impl Inner {
                 self.reload_snippets(next.directory());
                 self.refresh_sessions(&next).await;
                 match next.projects().await {
-                    Ok(projects) => self.emit(BackendEvent::Projects(projects)),
+                    Ok(projects) => self.emit(BackendEvent::Projects {
+                        connection: self.connections.active_id().map(str::to_string),
+                        projects,
+                    }),
                     Err(err) => self.error("Could not load projects", err),
                 }
             }
@@ -719,7 +844,10 @@ impl Inner {
                 Ok(entries) => self.emit(BackendEvent::FileSearch { query, entries }),
                 Err(err) => self.error("Could not search files", err),
             },
-            Action::InstallExtension { .. }
+            Action::ConnectServer { .. }
+            | Action::SaveConnection { .. }
+            | Action::DeleteConnection { .. }
+            | Action::InstallExtension { .. }
             | Action::InstallExtensionUrl { .. }
             | Action::ApproveExtension { .. }
             | Action::SetExtensionEnabled { .. }
@@ -732,16 +860,6 @@ impl Inner {
             | Action::ExtensionAction { .. }
             | Action::ExtensionStatusRefresh
             | Action::SetExtensionAppearance { .. } => {}
-            Action::Configure {
-                endpoint,
-                password,
-                workspace,
-            } => {
-                self.config.endpoint = endpoint;
-                self.config.password = password;
-                self.config.workspace = workspace;
-                return Control::Reconnect;
-            }
             Action::Reconnect => return Control::Reconnect,
             Action::Shutdown => return Control::Exit,
         }
@@ -1881,6 +1999,25 @@ impl Inner {
     }
 
     async fn refresh_sessions(&mut self, client: &Client) {
+        if self.config.ssh.is_some() {
+            let request = client.clone();
+            let result = with_retry(|| {
+                let client = request.clone();
+                async move { client.list_sessions(200).await }
+            })
+            .await;
+            match result {
+                Ok(sessions) => self.emit(BackendEvent::Sessions(sessions)),
+                Err(err) => {
+                    let directory = self.ssh_directory.clone().unwrap_or_else(|| ".".into());
+                    self.error(
+                        "Could not refresh remote sessions",
+                        remote_error(&directory, err),
+                    )
+                }
+            }
+            return;
+        }
         if self.tracked.is_empty() {
             self.cached_sessions.clear();
             self.emit(BackendEvent::Sessions(Vec::new()));
@@ -1981,6 +2118,45 @@ impl Inner {
         }
     }
 
+    fn use_connection(&mut self, connection: &SavedConnection) {
+        match connection.kind {
+            ConnectionKind::Ssh => {
+                self.config.ssh = Some(connection.ssh.clone());
+                self.config.endpoint = None;
+                self.config.password = None;
+                self.ssh_directory = Some(if connection.remote_directory.trim().is_empty() {
+                    ".".to_string()
+                } else {
+                    connection.remote_directory.clone()
+                });
+            }
+            ConnectionKind::Endpoint => {
+                self.config.ssh = None;
+                self.config.endpoint = Some(connection.endpoint.clone());
+                self.config.password = connection.password.clone();
+                self.ssh_directory = None;
+            }
+        }
+    }
+
+    fn emit_connections(&self) {
+        self.emit(BackendEvent::Connections {
+            connections: self.connections.catalog(),
+            active: self.connections.active_id().map(str::to_string),
+        });
+    }
+
+    fn save_connections(&self) -> bool {
+        if !self.connections.save() {
+            self.emit(BackendEvent::Toast {
+                kind: ToastKind::Error,
+                message: "Could not save server connections.".into(),
+            });
+            return false;
+        }
+        true
+    }
+
     fn emit(&self, event: BackendEvent) {
         tracing::debug!(target: "rchamber::event", kind = event_kind(&event), "emit");
         let _ = self.tx.send(event);
@@ -2072,6 +2248,33 @@ async fn view_session(client: &Client, id: &str) -> Result<Option<f64>, ApiError
     Ok(Some(idle))
 }
 
+fn validate_connection_draft(draft: &ConnectionDraft) -> Result<(), String> {
+    let value = draft.value.trim();
+    if value.is_empty() {
+        return Err("Enter a host or an endpoint URL.".into());
+    }
+    match draft.kind {
+        ConnectionKind::Endpoint => rchamber_api::ClientConfig::new(value)
+            .map(|_| ())
+            .map_err(|error| format!("Check the endpoint URL: {error}.")),
+        ConnectionKind::Ssh => rchamber_api::parse_target(value)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn remote_error(directory: &str, error: ApiError) -> ApiError {
+    let ApiError::Status { message, .. } = &error else {
+        return error;
+    };
+    if message.contains("LocationNotFoundError") || message.contains("Location not found") {
+        return ApiError::Other(format!(
+            "Remote folder `{directory}` is not a registered OpenCode project on this server. Add it on the remote host or edit the SSH connection to use an existing folder."
+        ));
+    }
+    error
+}
+
 fn event_kind(event: &BackendEvent) -> &'static str {
     match event {
         BackendEvent::Connection(_) => "connection",
@@ -2087,7 +2290,7 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::Providers(_) => "providers",
         BackendEvent::Agents(_) => "agents",
         BackendEvent::Commands(_) => "commands",
-        BackendEvent::Projects(_) => "projects",
+        BackendEvent::Projects { .. } => "projects",
         BackendEvent::SessionMetadataUpdated(_) => "session-metadata-updated",
         BackendEvent::SessionViewed { .. } => "session-viewed",
         BackendEvent::SessionPreview { .. } => "session-preview",
@@ -2104,6 +2307,7 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::Toast { .. } => "toast",
         BackendEvent::PromptQueued { .. } => "prompt-queued",
         BackendEvent::WorkspaceChanged(_) => "workspace-changed",
+        BackendEvent::Connections { .. } => "connections",
         BackendEvent::Extensions(_) => "extensions",
         BackendEvent::ExtensionInstalled { .. } => "extension-installed",
         BackendEvent::ExtensionResult { .. } => "extension-result",

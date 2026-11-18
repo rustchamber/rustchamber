@@ -21,18 +21,34 @@ pub struct ServerHandle {
     pub info: ServerInfo,
     pub password: Option<String>,
     pub endpoint: String,
-    child: Option<Child>,
+    pub(crate) child: Option<Child>,
+    pub(crate) ssh: Option<Child>,
+    pub(crate) ssh_stdin: Option<tokio::process::ChildStdin>,
 }
 
 impl ServerHandle {
     pub fn is_managed(&self) -> bool {
-        self.child.is_some()
+        self.child.is_some() || self.ssh.is_some()
+    }
+
+    /// Reap and report whether the SSH child has exited.
+    pub fn ssh_exited(&mut self) -> bool {
+        match &mut self.ssh {
+            Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+            None => false,
+        }
     }
 }
 
 impl Drop for ServerHandle {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+        }
+        if let Some(stdin) = self.ssh_stdin.take() {
+            drop(stdin);
+        }
+        if let Some(child) = &mut self.ssh {
             let _ = child.start_kill();
         }
     }
@@ -57,6 +73,8 @@ pub async fn launch(options: LaunchOptions) -> Result<ServerHandle, ApiError> {
             password,
             endpoint: url,
             child: None,
+            ssh: None,
+            ssh_stdin: None,
         });
     }
 
@@ -143,10 +161,12 @@ pub async fn launch(options: LaunchOptions) -> Result<ServerHandle, ApiError> {
         password: Some(password),
         endpoint,
         child: Some(child),
+        ssh: None,
+        ssh_stdin: None,
     })
 }
 
-fn spawn_log_reader<R>(reader: R, source: &'static str)
+pub(crate) fn spawn_log_reader<R>(reader: R, source: &'static str)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -183,7 +203,7 @@ fn readable_directory(directory: Option<&Path>) -> Option<String> {
     }
 }
 
-fn random_password() -> String {
+pub(crate) fn random_password() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     let bytes: [u8; 24] = rng.random();
@@ -194,7 +214,7 @@ fn random_password() -> String {
     out
 }
 
-fn free_port() -> std::io::Result<u16> {
+pub(crate) fn free_port() -> std::io::Result<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     drop(listener);

@@ -1,6 +1,7 @@
 pub mod action;
 pub mod attachments;
 pub mod backend;
+pub mod connections;
 pub mod extensions;
 pub mod format;
 pub mod live;
@@ -13,6 +14,10 @@ pub use action::{
     TrackedProject,
 };
 pub use backend::{ActionSink, Backend, Wake};
+pub use connections::{
+    CONNECTIONS_VERSION, ConnectionDraft, ConnectionKind, ConnectionsStore, LOCAL_SERVER_KEY,
+    SavedConnection, server_key,
+};
 pub use state::{AppModel, Chat, Startup, Toast, now_ms};
 pub use workspace::{
     DisplayPrefs, ProjectEntry, ProjectSort, SessionGrouping, WORKSPACE_VERSION, WorkspaceStore,

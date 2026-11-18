@@ -7,7 +7,10 @@ use eframe::egui::{
     Vec2,
 };
 use rchamber_api::models::ModelRef;
-use rchamber_app::{Action, AppModel, Backend, BackendEvent, LaunchConfig, ToastKind};
+use rchamber_app::{
+    Action, AppModel, Backend, BackendEvent, ConnectionDraft, ConnectionKind, LaunchConfig,
+    SavedConnection, ToastKind,
+};
 
 use crate::changes;
 use crate::chat;
@@ -295,6 +298,44 @@ fn zone_card_fill(p: &Palette) -> Color32 {
     }
 }
 
+#[derive(Clone)]
+pub struct ConnectionDialogState {
+    pub id: Option<String>,
+    pub kind: ConnectionKind,
+    pub name: String,
+    pub value: String,
+    pub remote_directory: String,
+    pub password: String,
+}
+
+impl ConnectionDialogState {
+    pub fn add(kind: ConnectionKind) -> Self {
+        Self {
+            id: None,
+            kind,
+            name: String::new(),
+            value: String::new(),
+            remote_directory: String::new(),
+            password: String::new(),
+        }
+    }
+
+    pub fn edit(connection: &SavedConnection) -> Self {
+        Self {
+            id: Some(connection.id.clone()),
+            kind: connection.kind,
+            name: connection.name.clone(),
+            value: if connection.is_ssh() {
+                connection.ssh.clone()
+            } else {
+                connection.endpoint.clone()
+            },
+            remote_directory: connection.remote_directory.clone(),
+            password: connection.password.clone().unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct UiState {
     pub show_settings: bool,
@@ -332,8 +373,8 @@ pub struct UiState {
     pub home_allow_all: bool,
     pub home_session: bool,
     pub focus_home_composer: bool,
-    pub settings_endpoint: String,
-    pub settings_password: String,
+    pub connection_dialog: Option<ConnectionDialogState>,
+    pub confirm_remove_connection: Option<String>,
     pub search_open: bool,
     pub session_search: String,
     pub sidebar_menu: bool,
@@ -446,6 +487,14 @@ impl RustChamber {
 
         let mut model = AppModel::default();
         model.drafts = crate::persist::load_drafts();
+        if model
+            .connections
+            .migrate_legacy(settings.endpoint.as_deref(), settings.password.as_deref())
+        {
+            settings.endpoint = None;
+            settings.password = None;
+            settings.save();
+        }
         let workspace = std::env::var("RCHAMBER_WORKSPACE")
             .ok()
             .filter(|value| !value.is_empty())
@@ -539,22 +588,40 @@ impl RustChamber {
             ui.add_project.tab = match panel.as_str() {
                 "clone" => crate::add_project::Tab::Clone,
                 "projects" => crate::add_project::Tab::Projects,
-                "opencode" => crate::add_project::Tab::OpenCode,
+                "opencode" => crate::add_project::Tab::Server(model.active_server_key()),
                 _ => crate::add_project::Tab::Home,
             };
             if ui.add_project.tab == crate::add_project::Tab::Clone {
                 ui.add_project.focus_clone = true;
             }
         }
-        ui.settings_endpoint = settings.endpoint.clone().unwrap_or_default();
-        ui.settings_password = settings.password.clone().unwrap_or_default();
-
         let ctx = cc.egui_ctx.clone();
         let wake = Arc::new(move || ctx.request_repaint()) as rchamber_app::Wake;
+        let (endpoint, password, ssh, ssh_directory) = match model.connections.active_connection() {
+            Some(connection) if connection.is_ssh() => (
+                None,
+                None,
+                Some(connection.ssh.clone()),
+                Some(if connection.remote_directory.trim().is_empty() {
+                    ".".to_string()
+                } else {
+                    connection.remote_directory.clone()
+                }),
+            ),
+            Some(connection) => (
+                Some(connection.endpoint.clone()),
+                connection.password.clone(),
+                None,
+                None,
+            ),
+            None => (None, None, None, None),
+        };
         let config = LaunchConfig {
             workspace,
-            endpoint: settings.endpoint.clone(),
-            password: settings.password.clone(),
+            endpoint,
+            password,
+            ssh,
+            ssh_directory,
         };
         let backend = Backend::spawn(config, Arc::clone(&wake));
         backend.send(Action::SetTrackedProjects(model.tracked_projects()));
@@ -827,8 +894,6 @@ impl RustChamber {
     }
 
     pub fn open_settings(&mut self) {
-        self.ui.settings_endpoint = self.settings.endpoint.clone().unwrap_or_default();
-        self.ui.settings_password = self.settings.password.clone().unwrap_or_default();
         self.ui.show_settings = true;
     }
 
@@ -866,27 +931,38 @@ impl RustChamber {
         }
     }
 
-    pub fn apply_connection_settings(&mut self) {
-        let endpoint = self.ui.settings_endpoint.trim().to_string();
-        let password = self.ui.settings_password.trim().to_string();
-        if !endpoint.is_empty()
-            && let Err(error) = rchamber_api::ClientConfig::new(&endpoint)
-        {
-            self.model
-                .toast(ToastKind::Error, format!("Invalid endpoint: {error}"));
-            return;
+    pub fn open_connection_dialog(&mut self, state: ConnectionDialogState) {
+        self.ui.connection_dialog = Some(state);
+    }
+
+    pub fn save_connection(&mut self, draft: ConnectionDraft) {
+        self.backend.send(Action::SaveConnection { draft });
+    }
+
+    pub fn delete_connection(&mut self, id: &str) {
+        let was_active = self.model.connections.active_id() == Some(id);
+        self.model.connections.remove(id);
+        self.backend
+            .send(Action::DeleteConnection { id: id.to_string() });
+        if was_active {
+            self.backend.send(Action::ConnectServer { id: None });
         }
-        self.settings.endpoint = (!endpoint.is_empty()).then_some(endpoint.clone());
-        self.settings.password = (!password.is_empty()).then_some(password.clone());
-        self.settings.save();
-        self.backend.send(Action::Configure {
-            endpoint: (!endpoint.is_empty()).then_some(endpoint),
-            password: (!password.is_empty()).then_some(password),
-            workspace: self.model.workspace.clone(),
-        });
-        self.ui.show_settings = false;
         self.model
-            .toast(ToastKind::Info, "Reconnecting to OpenCode…");
+            .toast(ToastKind::Info, "Server connection removed.");
+    }
+
+    pub fn connect_server(&mut self, id: Option<String>) {
+        let label = id
+            .as_ref()
+            .and_then(|id| self.model.connections.find(id))
+            .map(|connection| connection.display_name().to_string())
+            .unwrap_or_else(|| "the managed local server".into());
+        self.model
+            .connections
+            .set_active(id.clone(), rchamber_app::now_ms());
+        self.backend.send(Action::ConnectServer { id });
+        self.model
+            .toast(ToastKind::Info, format!("Connecting to {label}…"));
     }
 
     fn toggle_sidebar(&mut self) {
@@ -933,7 +1009,7 @@ impl RustChamber {
         }
         if let Some(id) = self.model.pending_extension_approval.take() {
             self.ui.show_settings = true;
-            crate::settings::open_page(ctx, 5);
+            crate::settings::open_extensions(ctx);
             self.ui.extension_approval = Some(id);
         }
         if let Some(id) = self.model.pending_extension_panel.take() {
@@ -1026,7 +1102,7 @@ impl RustChamber {
                 }
             }
             self.ui.show_settings = true;
-            settings::open_page(ctx, 5);
+            settings::open_extensions(ctx);
             close = true;
         }
         if close {

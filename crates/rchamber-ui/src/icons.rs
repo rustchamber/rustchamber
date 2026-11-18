@@ -72,6 +72,7 @@ pub enum Icon {
     Puzzle,
     CheckCheck,
     ChevronUp,
+    Server,
 }
 
 impl Icon {
@@ -143,6 +144,7 @@ impl Icon {
             Icon::Puzzle => "bytes://rust-ui/puzzle.svg",
             Icon::CheckCheck => "bytes://rust-ui/check-check.svg",
             Icon::ChevronUp => "bytes://rust-ui/chevron-up.svg",
+            Icon::Server => "bytes://rust-ui/server.svg",
         }
     }
 
@@ -214,6 +216,7 @@ impl Icon {
             Icon::Puzzle => data::PUZZLE,
             Icon::CheckCheck => data::CHECKCHECK,
             Icon::ChevronUp => data::CHEVRONUP,
+            Icon::Server => data::SERVER,
         }
     }
 }

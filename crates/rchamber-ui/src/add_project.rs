@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
@@ -32,24 +33,62 @@ const RAIL_GLYPH: f32 = 15.0;
 const CONTENT_GLYPH: f32 = 16.0;
 const GAP: f32 = 6.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
     Home,
     Projects,
     Clone,
-    OpenCode,
+    Server(String),
 }
 
 impl Tab {
-    fn subtitle(self) -> &'static str {
+    fn subtitle(&self, server: Option<&str>) -> String {
         match self {
-            Tab::Home => "Choose a folder to add to the sidebar.",
-            Tab::Projects => "Projects already in this window.",
-            Tab::Clone => "Clone a Git repository and add it.",
-            Tab::OpenCode => "Import projects registered in OpenCode.",
+            Tab::Home => "Choose a folder to add to the sidebar.".into(),
+            Tab::Projects => "Projects already in this window.".into(),
+            Tab::Clone => "Clone a Git repository and add it.".into(),
+            Tab::Server(_) => match server {
+                Some(name) => format!("Import projects registered on {name}."),
+                None => "Import projects registered in OpenCode.".into(),
+            },
         }
     }
+}
+
+/// One entry in the add project rail: the managed local server plus every
+/// saved connection.
+#[derive(Clone, Debug)]
+pub struct ServerItem {
+    pub key: String,
+    pub label: String,
+    pub local: bool,
+    pub projects: Vec<Project>,
+}
+
+pub fn server_items(app: &RustChamber) -> Vec<ServerItem> {
+    let mut items = vec![ServerItem {
+        key: rchamber_app::LOCAL_SERVER_KEY.to_string(),
+        label: "Local server".into(),
+        local: true,
+        projects: app
+            .model
+            .projects_for_connection(rchamber_app::LOCAL_SERVER_KEY)
+            .to_vec(),
+    }];
+    items.extend(
+        app.model
+            .connections
+            .connections()
+            .iter()
+            .map(|connection| ServerItem {
+                key: connection.id.clone(),
+                label: connection.display_name(),
+                local: false,
+                projects: app.model.projects_for_connection(&connection.id).to_vec(),
+            }),
+    );
+    items
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -211,7 +250,7 @@ struct Outcome {
     add: Option<PathBuf>,
     select: Option<String>,
     close_project: Option<String>,
-    opencode: Option<(String, Option<String>)>,
+    opencode: Option<(String, Option<String>, Option<String>)>,
     clone: bool,
     close: bool,
     open_failed: Option<String>,
@@ -257,10 +296,14 @@ pub fn display_path(path: &Path) -> String {
 }
 
 pub fn added(projects: &[ProjectEntry], path: &Path) -> bool {
+    added_on(projects, path, None)
+}
+
+fn added_on(projects: &[ProjectEntry], path: &Path, server: Option<&str>) -> bool {
     let path = path.to_string_lossy();
-    projects
-        .iter()
-        .any(|project| paths_match(&project.canonical, &path))
+    projects.iter().any(|project| {
+        project.server.as_deref() == server && paths_match(&project.canonical, &path)
+    })
 }
 
 pub fn is_valid_repo_url(url: &str) -> bool {
@@ -370,7 +413,26 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         .into_iter()
         .cloned()
         .collect();
-    let opencode: Vec<Project> = app.model.projects.clone();
+    let opencode = server_items(app);
+    let server_labels: HashMap<String, String> = projects
+        .iter()
+        .filter_map(|project| {
+            app.model
+                .project_server(project)
+                .map(|label| (project.id.clone(), label))
+        })
+        .collect();
+    let active_server = app.model.active_server_key();
+    let subtitle = {
+        let label = match &app.ui.add_project.tab {
+            Tab::Server(key) => opencode
+                .iter()
+                .find(|item| &item.key == key)
+                .map(|item| item.label.as_str()),
+            _ => None,
+        };
+        app.ui.add_project.tab.subtitle(label)
+    };
     let active_directory = app
         .model
         .workspace
@@ -419,6 +481,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                 &mut rail_ui,
                 state,
                 &projects,
+                &opencode,
                 active_directory.as_deref(),
                 &p,
             );
@@ -438,7 +501,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     footer_rect.top() - FOOTER_GAP,
                 ),
             );
-            header(ui, header_rect, state, &p, &mut outcome);
+            header(ui, header_rect, &subtitle, &p, &mut outcome);
 
             let mut body_ui = ui.new_child(
                 UiBuilder::new()
@@ -446,7 +509,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     .layout(Layout::top_down(Align::Min)),
             );
             body_ui.set_clip_rect(body_rect);
-            match state.tab {
+            match &state.tab {
                 Tab::Home => home_tab(&mut body_ui, state, &projects, &p, &mut outcome),
                 Tab::Projects => projects_tab(
                     &mut body_ui,
@@ -455,10 +518,21 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     active_directory.as_deref(),
                     &p,
                     &mut outcome,
+                    &server_labels,
                 ),
                 Tab::Clone => clone_tab(&mut body_ui, state, &projects, &p),
-                Tab::OpenCode => {
-                    opencode_tab(&mut body_ui, state, &projects, &opencode, &p, &mut outcome)
+                Tab::Server(key) => {
+                    if let Some(server) = opencode.iter().find(|item| &item.key == key) {
+                        opencode_tab(
+                            &mut body_ui,
+                            state,
+                            &projects,
+                            server,
+                            &active_server == key,
+                            &p,
+                            &mut outcome,
+                        );
+                    }
                 }
             }
 
@@ -476,11 +550,17 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         outcome.close = true;
     }
     if let Some(path) = outcome.add {
-        register_project(app, &path, None, true);
+        register_project(app, &path, None, true, None);
         outcome.close = true;
     }
-    if let Some((directory, name)) = outcome.opencode {
-        register_project(app, Path::new(&directory), name.as_deref(), false);
+    if let Some((directory, name, server)) = outcome.opencode {
+        register_project(
+            app,
+            Path::new(&directory),
+            name.as_deref(),
+            false,
+            server.as_deref(),
+        );
         refresh_listings(app);
     }
     if let Some(id) = outcome.select {
@@ -521,6 +601,7 @@ fn rail(
     ui: &mut Ui,
     state: &mut State,
     projects: &[ProjectEntry],
+    servers: &[ServerItem],
     active_directory: Option<&Path>,
     p: &Palette,
 ) {
@@ -584,18 +665,15 @@ fn rail(
         state.sync_clone_listing(projects);
     }
     ui.add_space(2.0);
-    if rail_item(
-        ui,
-        p,
-        Icon::Bot,
-        "From OpenCode",
-        state.tab == Tab::OpenCode,
-    )
-    .clicked()
-    {
-        state.tab = Tab::OpenCode;
-        state.query.clear();
-        state.error = None;
+    widgets::section_label(ui, "Servers", p);
+    ui.add_space(4.0);
+    for server in servers {
+        let selected = matches!(&state.tab, Tab::Server(key) if key == &server.key);
+        if rail_item(ui, p, Icon::Bot, &server.label, selected).clicked() {
+            state.tab = Tab::Server(server.key.clone());
+            state.query.clear();
+            state.error = None;
+        }
     }
 }
 
@@ -648,7 +726,7 @@ fn rail_root(ui: &mut Ui, p: &Palette, label: &str, path: &str) -> egui::Respons
     response.on_hover_text(path)
 }
 
-fn header(ui: &mut Ui, rect: Rect, state: &State, p: &Palette, outcome: &mut Outcome) {
+fn header(ui: &mut Ui, rect: Rect, subtitle: &str, p: &Palette, outcome: &mut Outcome) {
     ui.painter().text(
         Pos2::new(rect.left() + CONTENT_PAD, rect.top() + 13.0),
         Align2::LEFT_TOP,
@@ -659,7 +737,7 @@ fn header(ui: &mut Ui, rect: Rect, state: &State, p: &Palette, outcome: &mut Out
     ui.painter().text(
         Pos2::new(rect.left() + CONTENT_PAD, rect.top() + 34.0),
         Align2::LEFT_TOP,
-        state.tab.subtitle(),
+        subtitle,
         theme::font(theme::TEXT_META),
         p.fg_muted,
     );
@@ -843,6 +921,7 @@ fn projects_tab(
     active_directory: Option<&Path>,
     p: &Palette,
     outcome: &mut Outcome,
+    server_labels: &HashMap<String, String>,
 ) {
     ui.add_space(4.0);
     widgets::search_field(
@@ -882,7 +961,13 @@ fn projects_tab(
                 let active = active_directory.is_some_and(|directory| {
                     paths_match(&project.canonical, &directory.to_string_lossy())
                 });
-                let action = project_row(ui, p, project, active);
+                let action = project_row(
+                    ui,
+                    p,
+                    project,
+                    active,
+                    server_labels.get(&project.id).map(String::as_str),
+                );
                 if action.open {
                     outcome.select = Some(project.id.clone());
                     outcome.close = true;
@@ -903,21 +988,24 @@ fn opencode_tab(
     ui: &mut Ui,
     state: &mut State,
     projects: &[ProjectEntry],
-    opencode: &[Project],
+    server: &ServerItem,
+    active: bool,
     p: &Palette,
     outcome: &mut Outcome,
 ) {
+    let placeholder = format!("Search {} projects…", server.label);
     ui.add_space(4.0);
     widgets::search_field(
         ui,
         &mut state.query,
-        "Search OpenCode projects…",
+        &placeholder,
         p,
         Id::unique("add-project/opencode-search"),
     );
     ui.add_space(GAP);
     let needle = state.query.trim().to_lowercase();
-    let filtered: Vec<&Project> = opencode
+    let filtered: Vec<&Project> = server
+        .projects
         .iter()
         .filter(|project| {
             needle.is_empty()
@@ -927,26 +1015,49 @@ fn opencode_tab(
         .collect();
     let list_height = ui.available_height().max(80.0);
     ScrollArea::vertical()
-        .id_salt("add-project/opencode")
+        .id_salt(("add-project/opencode", &server.key))
         .max_height(list_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if filtered.is_empty() {
-                let text = if opencode.is_empty() {
-                    "Connect to OpenCode to see its projects."
+                if server.projects.is_empty() {
+                    let text = if active {
+                        format!("{} lists no projects.", server.label)
+                    } else {
+                        format!("Connect to {} to see its projects.", server.label)
+                    };
+                    empty_state(ui, p, Icon::Bot, "No projects", &text);
                 } else {
-                    "No matching projects."
-                };
-                empty_state(ui, p, Icon::Bot, "No projects", text);
+                    empty_state(ui, p, Icon::Bot, "No projects", "No matching projects.");
+                }
                 return;
             }
             for project in filtered {
                 let path = Path::new(&project.canonical);
-                let is_added = added(projects, path);
-                let available = path.is_dir();
-                if opencode_row(ui, p, project, is_added, available) {
-                    outcome.opencode = Some((project.canonical.clone(), project.name.clone()));
+                let host = if server.local {
+                    None
+                } else {
+                    Some(server.label.as_str())
+                };
+                let is_added = added_on(
+                    projects,
+                    path,
+                    if server.local {
+                        None
+                    } else {
+                        Some(server.key.as_str())
+                    },
+                );
+                // A remote server knows its own folders; the local check only
+                // applies to the managed local server.
+                let available = if server.local { path.is_dir() } else { true };
+                if opencode_row(ui, p, project, is_added, available, host) {
+                    outcome.opencode = Some((
+                        project.canonical.clone(),
+                        project.name.clone(),
+                        host.map(|_| server.key.clone()),
+                    ));
                 }
             }
         });
@@ -1143,7 +1254,7 @@ fn footer(
     );
     footer_ui.set_clip_rect(inner);
     footer_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        match state.tab {
+        match &state.tab {
             Tab::Home => {
                 let target = state.target_path();
                 let current_added = added(projects, &target);
@@ -1195,16 +1306,16 @@ fn footer(
                     outcome.clone = true;
                 }
             }
-            Tab::Projects | Tab::OpenCode => {
+            Tab::Projects | Tab::Server(_) => {
                 if widgets::ghost_button(ui, "Done", None, p).clicked() {
                     outcome.close = true;
                 }
             }
         }
-        let finder = match state.tab {
+        let finder = match &state.tab {
             Tab::Home => Some(state.path.clone()),
             Tab::Clone => Some(state.clone_base.clone()),
-            Tab::Projects | Tab::OpenCode => active_directory
+            Tab::Projects | Tab::Server(_) => active_directory
                 .map(Path::to_path_buf)
                 .or_else(|| Some(state.path.clone())),
         };
@@ -1301,7 +1412,13 @@ struct ProjectAction {
     close: bool,
 }
 
-fn project_row(ui: &mut Ui, p: &Palette, project: &ProjectEntry, active: bool) -> ProjectAction {
+fn project_row(
+    ui: &mut Ui,
+    p: &Palette,
+    project: &ProjectEntry,
+    active: bool,
+    server: Option<&str>,
+) -> ProjectAction {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_TALL), Sense::click());
     if response.hovered() {
@@ -1325,14 +1442,19 @@ fn project_row(ui: &mut Ui, p: &Palette, project: &ProjectEntry, active: bool) -
     let badge_left = paint_added(ui, p, open_rect.left() - 10.0, rect.center().y);
     let name_x = rect.left() + 8.0 + CONTENT_GLYPH + 9.0;
     let text_width = (badge_left - name_x - 12.0).max(30.0);
-    paint_truncated(
+    let tag_width = server.map_or(0.0, |label| widgets::server_tag_width(ui, label) + 6.0);
+    let name = paint_truncated(
         ui,
         Pos2::new(name_x, rect.center().y - 9.0),
         project.display_name(),
         theme::font_medium(theme::TEXT_UI_LABEL),
         p.fg,
-        text_width,
+        (text_width - tag_width).max(30.0),
     );
+    if let Some(label) = server {
+        let tag_left = (name_x + name + 6.0).min(badge_left - tag_width - 2.0);
+        widgets::paint_server_badge(ui, tag_left, rect.center().y - 9.0, label, p);
+    }
     paint_truncated(
         ui,
         Pos2::new(name_x, rect.center().y + 9.0),
@@ -1377,6 +1499,7 @@ fn opencode_row(
     project: &Project,
     is_added: bool,
     available: bool,
+    server: Option<&str>,
 ) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_TALL), Sense::click());
@@ -1433,14 +1556,19 @@ fn opencode_row(
     };
     let name_x = rect.left() + 8.0 + CONTENT_GLYPH + 9.0;
     let text_width = (right - name_x - 10.0).max(30.0);
-    paint_truncated(
+    let tag_width = server.map_or(0.0, |label| widgets::server_tag_width(ui, label) + 6.0);
+    let name = paint_truncated(
         ui,
         Pos2::new(name_x, rect.center().y - 9.0),
         &project.display_name(),
         theme::font_medium(theme::TEXT_UI_LABEL),
         p.fg,
-        text_width,
+        (text_width - tag_width).max(30.0),
     );
+    if let Some(label) = server {
+        let tag_left = (name_x + name + 6.0).min(right - tag_width - 2.0);
+        widgets::paint_server_badge(ui, tag_left, rect.center().y - 9.0, label, p);
+    }
     paint_truncated(
         ui,
         Pos2::new(name_x, rect.center().y + 9.0),
@@ -1492,18 +1620,20 @@ fn paint_truncated(
     font: egui::FontId,
     color: Color32,
     max_width: f32,
-) {
+) -> f32 {
     let galley = WidgetText::from(RichText::new(text).font(font).color(color)).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
         max_width.max(1.0),
         TextStyle::Body,
     );
+    let width = galley.size().x;
     ui.painter().galley(
         Pos2::new(center.x, center.y - galley.size().y * 0.5),
         galley,
         color,
     );
+    width
 }
 
 fn field_with_icon(
@@ -1632,9 +1762,18 @@ fn empty_state(ui: &mut Ui, p: &Palette, icon: Icon, title: &str, description: &
     });
 }
 
-fn register_project(app: &mut RustChamber, directory: &Path, name: Option<&str>, activate: bool) {
+fn register_project(
+    app: &mut RustChamber,
+    directory: &Path,
+    name: Option<&str>,
+    activate: bool,
+    server: Option<&str>,
+) {
     let directory = directory.to_string_lossy().to_string();
-    let id = app.model.add_project(&directory, name);
+    let id = match server {
+        Some(server) => app.model.add_remote_project(&directory, name, server),
+        None => app.model.add_project(&directory, name),
+    };
     app.sync_tracked_projects();
     if activate {
         app.select_project(&id);
@@ -1774,6 +1913,7 @@ mod tests {
             color: None,
             hidden: false,
             added_at: 0.0,
+            server: None,
         }
     }
 
@@ -1849,6 +1989,24 @@ mod tests {
         let projects = vec![entry("p1", "/tmp/example/")];
         assert!(added(&projects, Path::new("/tmp/example")));
         assert!(!added(&projects, Path::new("/tmp/other")));
+    }
+
+    #[test]
+    fn server_tabs_use_the_connection_name() {
+        let tab = Tab::Server("conn:1".into());
+        assert_eq!(
+            tab.subtitle(Some("Blueroom")),
+            "Import projects registered on Blueroom."
+        );
+        assert_eq!(
+            tab.subtitle(None),
+            "Import projects registered in OpenCode."
+        );
+        assert_eq!(
+            Tab::Home.subtitle(None),
+            "Choose a folder to add to the sidebar."
+        );
+        assert_ne!(tab, Tab::Server("conn:2".into()));
     }
 
     #[test]

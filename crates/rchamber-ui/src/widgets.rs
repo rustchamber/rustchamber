@@ -1972,6 +1972,61 @@ pub fn section_label(ui: &mut Ui, text: &str, p: &Palette) {
     );
 }
 
+pub const SERVER_TAG_ICON: f32 = 10.0;
+const SERVER_TAG_GAP: f32 = 4.0;
+const SERVER_TAG_PAD: f32 = 6.0;
+
+/// Width of the server badge that marks a project as living on a saved server.
+pub fn server_tag_width(ui: &Ui, label: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(theme::TEXT_TAG),
+        Color32::PLACEHOLDER,
+    );
+    SERVER_TAG_PAD * 2.0 + SERVER_TAG_ICON + SERVER_TAG_GAP + galley.size().x
+}
+
+pub fn paint_server_tag(ui: &Ui, rect: Rect, label: &str, p: &Palette) {
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::XS), p.tag_bg);
+    icons::paint(
+        ui,
+        Icon::Server,
+        Rect::from_center_size(
+            Pos2::new(
+                rect.left() + SERVER_TAG_PAD + SERVER_TAG_ICON * 0.5,
+                rect.center().y,
+            ),
+            Vec2::splat(SERVER_TAG_ICON),
+        ),
+        p.fg_muted,
+    );
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        theme::font_mono(theme::TEXT_TAG),
+        p.fg_muted,
+    );
+    ui.painter().galley(
+        Pos2::new(
+            rect.left() + SERVER_TAG_PAD + SERVER_TAG_ICON + SERVER_TAG_GAP,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        p.fg_muted,
+    );
+}
+
+/// Paints a server badge starting at `left` and returns the x after it.
+pub fn paint_server_badge(ui: &Ui, left: f32, center_y: f32, label: &str, p: &Palette) -> f32 {
+    let width = server_tag_width(ui, label);
+    let rect = Rect::from_min_size(
+        Pos2::new(left, center_y - theme::TAG_HEIGHT * 0.5),
+        Vec2::new(width, theme::TAG_HEIGHT),
+    );
+    paint_server_tag(ui, rect, label, p);
+    rect.right()
+}
+
 pub fn tag_chip(ui: &mut Ui, label: &str, p: &Palette) -> Response {
     let font = theme::font_mono(theme::TEXT_TAG);
     let galley = ui
@@ -2042,6 +2097,29 @@ pub fn text_field_ex(
     p: &Palette,
     id: Id,
 ) -> Response {
+    text_field_impl(ui, value, hint, invalid, enabled, false, p, id)
+}
+
+pub fn password_field(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    p: &Palette,
+    id: Id,
+) -> Response {
+    text_field_impl(ui, value, hint, false, true, true, p, id)
+}
+
+fn text_field_impl(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    invalid: bool,
+    enabled: bool,
+    password: bool,
+    p: &Palette,
+    id: Id,
+) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, INPUT_HEIGHT),
@@ -2095,6 +2173,7 @@ pub fn text_field_ex(
     );
     let edit = egui::TextEdit::singleline(value)
         .id(id)
+        .password(password)
         .frame(egui::Frame::NONE)
         .margin(Margin::ZERO)
         .hint_text(

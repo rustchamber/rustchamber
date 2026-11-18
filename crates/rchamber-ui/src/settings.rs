@@ -6,7 +6,9 @@ use eframe::egui::{
 };
 use rchamber_api::models::{Agent, Command, Model, Provider, Skill};
 use rchamber_app::format::compact_number;
-use rchamber_app::{Action, Connection};
+use rchamber_app::{Action, Connection, ConnectionDraft, ConnectionKind, SavedConnection};
+
+use crate::app::ConnectionDialogState;
 
 use crate::app::RustChamber;
 use crate::icons::{self, Icon};
@@ -46,6 +48,8 @@ const CARD_PADDING: f32 = 16.0;
 const CARD_GAP: f32 = 12.0;
 const CARD_MIN_HEIGHT: f32 = 132.0;
 const CARD_GAP_SETTINGS: f32 = 16.0;
+const CONNECTION_CARD_HEIGHT: f32 = 68.0;
+const CONNECTION_DIALOG_WIDTH: f32 = 440.0;
 const SETTINGS_GRID_MIN: f32 = 560.0;
 const CARD_COLUMNS_WIDE: f32 = 768.0;
 const CARD_COLUMNS_MEDIUM: f32 = 576.0;
@@ -153,14 +157,19 @@ pub static PAGES: [Page; 11] = [
     Page {
         section: Section::General,
         label: "General",
-        description: "Connection, server process, and the settings file.",
+        description: "Managed OpenCode server, saved endpoints, and SSH connections.",
         group: Group::General,
         keywords: &[
             "general",
             "connection",
+            "connections",
             "endpoint",
             "password",
             "server",
+            "ssh",
+            "remote",
+            "host",
+            "tunnel",
             "binary",
             "cli",
             "reconnect",
@@ -293,6 +302,14 @@ pub fn open_page(ctx: &egui::Context, index: usize) {
     if let Some(page) = PAGES.get(index) {
         set(ctx, Id::unique("settings.section"), page.section);
     }
+}
+
+pub fn open_server(ctx: &egui::Context) {
+    set(ctx, Id::unique("settings.section"), Section::General);
+}
+
+pub fn open_extensions(ctx: &egui::Context) {
+    set(ctx, Id::unique("settings.section"), Section::Extensions);
 }
 
 fn current_section(ctx: &egui::Context) -> Section {
@@ -736,6 +753,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         overlay = Overlay::default();
     }
     ctx.data_mut(|data| data.insert_temp(overlay_id(), overlay));
+    connection_dialogs(ctx, app);
 }
 
 fn paint_card(ui: &Ui, rect: Rect, p: &Palette, shadow: &egui::epaint::Shadow) {
@@ -1196,27 +1214,6 @@ fn field_row(
     ui.add_space(4.0);
 }
 
-fn stacked_field(ui: &mut Ui, p: &Palette, label: &str, add: impl FnOnce(&mut Ui)) {
-    ui.label(
-        RichText::new(label)
-            .font(theme::font(theme::TEXT_UI_LABEL))
-            .color(p.fg),
-    );
-    ui.add_space(8.0);
-    let width = ui.available_width().min(CONTROL_MAX_WIDTH);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        ui.allocate_ui_with_layout(
-            Vec2::new(width, 0.0),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.set_max_width(width);
-                add(ui);
-            },
-        );
-    });
-}
-
 fn draw_minus(ui: &Ui, center: Pos2, color: Color32) {
     ui.painter().hline(
         (center.x - 4.0)..=(center.x + 4.0),
@@ -1358,50 +1355,6 @@ fn percent_stepper(
     reset: f32,
 ) -> Option<f32> {
     unit_stepper(ui, p, value, min, max, step, "%", reset)
-}
-
-fn text_field(ui: &mut Ui, text: &mut String, hint: &str, password: bool, p: &Palette) {
-    let width = ui.available_width();
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, widgets::INPUT_HEIGHT), Sense::click());
-    let id = response.id.with("field");
-    let focused = ui.memory(|memory| memory.has_focus(id));
-    let corner = CornerRadius::same(theme::radius::MD);
-    ui.painter().rect_filled(rect, corner, p.alpha(p.card, 178));
-    let (width, color) = if focused {
-        (theme::BORDER, p.alpha(p.fg, 66))
-    } else {
-        (theme::HAIRLINE, p.alpha(p.fg, 41))
-    };
-    ui.painter().rect_stroke(
-        rect,
-        corner,
-        Stroke::new(width, color),
-        egui::StrokeKind::Inside,
-    );
-    let text_rect = rect.shrink2(Vec2::new(10.0, 5.0));
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(text_rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    let edit = egui::TextEdit::singleline(text)
-        .id(id)
-        .password(password)
-        .frame(egui::Frame::NONE)
-        .margin(Margin::ZERO)
-        .hint_text(
-            RichText::new(hint)
-                .font(theme::font(theme::TEXT_UI_LABEL))
-                .color(p.fg_muted),
-        )
-        .font(theme::font(theme::TEXT_UI_LABEL))
-        .text_color(p.fg)
-        .desired_width(f32::INFINITY);
-    let edit_response = child.add(edit);
-    if response.clicked() {
-        edit_response.request_focus();
-    }
 }
 
 fn matches_query(needle: &str, fields: &[&str]) -> bool {
@@ -2954,15 +2907,16 @@ fn compute(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         "Compute & Quotas",
         "Local keys with zero account, or a managed compute pass.",
     );
-    let endpoint = if app.ui.settings_endpoint.trim().is_empty() {
-        app.model
-            .server
-            .as_ref()
-            .and_then(|server| server.urls.first().cloned())
-            .unwrap_or_else(|| "Managed child process".into())
-    } else {
-        app.ui.settings_endpoint.clone()
-    };
+    let active_connection = app.model.connections.active_connection();
+    let endpoint = active_connection
+        .map(|connection| connection.summary().to_string())
+        .or_else(|| {
+            app.model
+                .server
+                .as_ref()
+                .and_then(|server| server.urls.first().cloned())
+        })
+        .unwrap_or_else(|| "Managed child process".into());
     let (connection, color) = match &app.model.connection {
         Connection::Ready => ("Connected", p.green),
         Connection::Connecting => ("Starting", p.primary),
@@ -2970,7 +2924,7 @@ fn compute(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         Connection::Failed(_) => ("Offline", p.red),
         Connection::Disconnected => ("Disconnected", p.fg_muted),
     };
-    let managed = app.ui.settings_endpoint.trim().is_empty();
+    let managed = active_connection.is_none();
     settings_columns(
         ui,
         |ui| {
@@ -3150,78 +3104,543 @@ fn value_row(ui: &mut Ui, p: &Palette, label: &str, value: &str) {
 }
 
 fn general(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
-    page_header(
-        ui,
-        p,
-        "General",
-        "Connection, server process, and the settings file.",
-    );
-    let (label, color) = match &app.model.connection {
+    let mut dialog: Option<ConnectionKind> = None;
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("General & OpenCode Server")
+                    .font(theme::font_semibold(theme::TEXT_PAGE_TITLE))
+                    .color(p.fg),
+            );
+            ui.add_space(4.0);
+            description_text(
+                ui,
+                p,
+                "Managed OpenCode server, saved endpoints, and remote SSH hosts.",
+                theme::font(theme::TEXT_META),
+            );
+        });
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            if let Some(kind) = add_server_button(ui, p) {
+                dialog = Some(kind);
+            }
+        });
+    });
+    ui.add_space(PAGE_HEADER_GAP);
+
+    let active = app.model.connections.active_id().map(str::to_string);
+    let mut action: Option<ServerAction> = None;
+    if let Some(next) = connection_card(ui, p, None, active.is_none(), &app.model.connection) {
+        action = Some(next);
+    }
+    ui.add_space(CARD_GAP);
+    let disconnected = Connection::Disconnected;
+    for connection in app.model.connections.connections() {
+        let is_active = active.as_deref() == Some(connection.id.as_str());
+        let state = if is_active {
+            &app.model.connection
+        } else {
+            &disconnected
+        };
+        if let Some(next) = connection_card(ui, p, Some(connection), is_active, state) {
+            action = Some(next);
+        }
+        ui.add_space(CARD_GAP);
+    }
+    if app.model.connections.connections().is_empty() {
+        ui.add_space(4.0);
+        muted(
+            ui,
+            p,
+            "No saved servers yet. Add an endpoint or an SSH host to connect remotely.",
+        );
+    }
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if widgets::ghost_button(ui, "Restart", Some(Icon::Refresh), p).clicked() {
+            app.backend.send(Action::Reconnect);
+        }
+    });
+
+    match action {
+        Some(ServerAction::Connect(id)) => app.connect_server(id),
+        Some(ServerAction::Edit(id)) => {
+            if let Some(connection) = app.model.connections.find(&id).cloned() {
+                app.open_connection_dialog(ConnectionDialogState::edit(&connection));
+            }
+        }
+        Some(ServerAction::Remove(id)) => {
+            app.ui.confirm_remove_connection = Some(id);
+        }
+        None => {}
+    }
+    if let Some(kind) = dialog {
+        app.open_connection_dialog(ConnectionDialogState::add(kind));
+    }
+}
+
+fn connection_state<'a>(connection: &'a Connection, p: &Palette) -> (&'a str, Color32) {
+    match connection {
         Connection::Ready => ("Connected", p.green),
         Connection::Connecting => ("Starting", p.primary),
         Connection::Reconnecting(_) => ("Reconnecting", p.coral),
         Connection::Failed(_) => ("Offline", p.red),
         Connection::Disconnected => ("Disconnected", p.fg_muted),
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ServerAction {
+    Connect(Option<String>),
+    Edit(String),
+    Remove(String),
+}
+
+fn add_server_button(ui: &mut Ui, p: &Palette) -> Option<ConnectionKind> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        let add = widgets::primary_button(ui, "Add server", Some(Icon::Plus), p);
+        let menu_id = Id::unique("settings/server/add-menu");
+        let mut open: bool = ui
+            .ctx()
+            .data(|data| data.get_temp::<bool>(menu_id))
+            .unwrap_or(false);
+        if add.clicked() {
+            open = !open;
+        }
+        let mut items = Vec::new();
+        crate::app::menu_popup(ui.ctx(), &add, menu_id, &mut open, p, 4.0, |ui, _| {
+            ui.set_width(210.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            items.push(widgets::button(
+                ui,
+                "Add server",
+                Some(Icon::Link),
+                widgets::ButtonVariant::Ghost,
+                widgets::ButtonSize::Sm,
+                p,
+            ));
+            if items[0].clicked() {
+                chosen = Some(ConnectionKind::Endpoint);
+            }
+            items.push(widgets::button(
+                ui,
+                "Add SSH server",
+                Some(Icon::Terminal),
+                widgets::ButtonVariant::Ghost,
+                widgets::ButtonSize::Sm,
+                p,
+            ));
+            if items[1].clicked() {
+                chosen = Some(ConnectionKind::Ssh);
+            }
+        });
+        crate::app::menu_nav_focus(ui.ctx(), menu_id, open, &items);
+        if chosen.is_some() {
+            open = false;
+        }
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(menu_id, open);
+        });
+    });
+    chosen
+}
+
+fn connection_card(
+    ui: &mut Ui,
+    p: &Palette,
+    connection: Option<&SavedConnection>,
+    active: bool,
+    state: &Connection,
+) -> Option<ServerAction> {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), CONNECTION_CARD_HEIGHT),
+        Sense::click(),
+    );
+    crate::widgets::pointer(ui, &response);
+    let fill = if active {
+        p.selection
+    } else if response.hovered() {
+        p.hover
+    } else {
+        p.card
     };
-    let version = app
-        .model
-        .server
-        .as_ref()
-        .map(|server| server.version.clone());
-    section(ui, p, "Connection", "", None, false, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            widgets::status_dot(ui, color);
-            ui.label(
-                RichText::new(label)
-                    .font(theme::font_medium(theme::TEXT_META))
-                    .color(color),
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::radius::MD), fill);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(theme::radius::MD),
+        Stroke::new(theme::HAIRLINE, p.edge_muted()),
+        egui::StrokeKind::Inside,
+    );
+
+    let name = connection
+        .map(|connection| connection.display_name())
+        .unwrap_or_else(|| "Managed local server".into());
+    let summary = connection
+        .map(|connection| connection.summary())
+        .unwrap_or_else(|| "Supervised by RustChamber on 127.0.0.1".into());
+    let text_width = (rect.width() - 150.0).max(40.0);
+    let name = fit_text(
+        ui,
+        &name,
+        &theme::font_medium(theme::TEXT_UI_LABEL),
+        text_width,
+    );
+    let summary = fit_text(
+        ui,
+        &summary,
+        &theme::font_mono(theme::TEXT_MICRO),
+        text_width,
+    );
+    let (status, status_color) = if active {
+        connection_state(state, p)
+    } else {
+        ("Inactive", p.fg_muted)
+    };
+    ui.painter().circle_filled(
+        Pos2::new(rect.left() + 18.0, rect.center().y),
+        3.5,
+        status_color,
+    );
+    ui.painter().text(
+        Pos2::new(rect.left() + 32.0, rect.top() + 24.0),
+        Align2::LEFT_CENTER,
+        name,
+        theme::font_medium(theme::TEXT_UI_LABEL),
+        p.fg,
+    );
+    ui.painter().text(
+        Pos2::new(rect.left() + 32.0, rect.top() + 46.0),
+        Align2::LEFT_CENTER,
+        summary,
+        theme::font_mono(theme::TEXT_MICRO),
+        p.fg_muted,
+    );
+    let status_right = rect.right() - 52.0;
+    ui.painter().text(
+        Pos2::new(status_right, rect.center().y),
+        Align2::RIGHT_CENTER,
+        status,
+        theme::font(theme::TEXT_MICRO),
+        status_color,
+    );
+
+    let more_rect = Rect::from_center_size(
+        Pos2::new(rect.right() - 24.0, rect.center().y),
+        Vec2::splat(28.0),
+    );
+    let more = ui.interact(more_rect, response.id.with("more"), Sense::click());
+    icons::paint(
+        ui,
+        Icon::More,
+        Rect::from_center_size(more_rect.center(), Vec2::splat(16.0)),
+        if more.hovered() { p.fg } else { p.fg_muted },
+    );
+    let menu_id = connection
+        .map(|connection| format!("settings/server/menu/{}", connection.id))
+        .unwrap_or_else(|| "settings/server/menu/managed".into());
+    let menu_id = Id::unique(&menu_id);
+    let mut open = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(menu_id))
+        .unwrap_or(false);
+    if more.clicked() {
+        open = !open;
+    }
+    let mut action = None;
+    let mut items = Vec::new();
+    crate::app::menu_popup(ui.ctx(), &more, menu_id, &mut open, p, 4.0, |ui, _| {
+        ui.set_width(180.0);
+        ui.spacing_mut().item_spacing.y = 4.0;
+        items.push(widgets::button(
+            ui,
+            "Connect",
+            Some(Icon::Link),
+            widgets::ButtonVariant::Ghost,
+            widgets::ButtonSize::Sm,
+            p,
+        ));
+        if items[0].clicked() {
+            action = Some(ServerAction::Connect(
+                connection.map(|connection| connection.id.clone()),
+            ));
+        }
+        if let Some(connection) = connection {
+            items.push(widgets::button(
+                ui,
+                "Edit",
+                Some(Icon::Pencil),
+                widgets::ButtonVariant::Ghost,
+                widgets::ButtonSize::Sm,
+                p,
+            ));
+            if items[1].clicked() {
+                action = Some(ServerAction::Edit(connection.id.clone()));
+            }
+            items.push(widgets::button(
+                ui,
+                "Remove",
+                Some(Icon::Trash),
+                widgets::ButtonVariant::Destructive,
+                widgets::ButtonSize::Sm,
+                p,
+            ));
+            if items[2].clicked() {
+                action = Some(ServerAction::Remove(connection.id.clone()));
+            }
+        }
+    });
+    crate::app::menu_nav_focus(ui.ctx(), menu_id, open, &items);
+    if action.is_some() {
+        open = false;
+    }
+    if action.is_none() && response.clicked() && !more.hovered() {
+        action = Some(ServerAction::Connect(
+            connection.map(|connection| connection.id.clone()),
+        ));
+    }
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(menu_id, open);
+    });
+    action
+}
+
+fn dialogs_connection_field(
+    ui: &mut Ui,
+    p: &Palette,
+    label: &str,
+    hint: &str,
+    value: &mut String,
+    password: bool,
+    id: Id,
+) {
+    ui.label(
+        RichText::new(label)
+            .font(theme::font(theme::TEXT_UI_LABEL))
+            .color(p.fg),
+    );
+    ui.add_space(6.0);
+    if password {
+        widgets::password_field(ui, value, hint, p, id);
+    } else {
+        widgets::text_field(ui, value, hint, p, id);
+    }
+}
+
+fn connection_dialogs(ctx: &egui::Context, app: &mut RustChamber) {
+    remove_connection_dialog(ctx, app);
+    connection_dialog(ctx, app);
+}
+
+fn connection_dialog(ctx: &egui::Context, app: &mut RustChamber) {
+    let Some(mut state) = app.ui.connection_dialog.clone() else {
+        return;
+    };
+    let p = app.palette.clone();
+    let editing = state.id.is_some();
+    let title = if editing {
+        "Edit server"
+    } else if state.kind == ConnectionKind::Ssh {
+        "Add SSH server"
+    } else {
+        "Add server"
+    };
+    let dialog_width = CONNECTION_DIALOG_WIDTH.min((ctx.content_rect().width() - 48.0).max(260.0));
+    let mut save = false;
+    let mut cancel = false;
+    let modal = egui::Modal::new(Id::unique("connection-dialog"))
+        .frame(theme::dialog_frame(&p))
+        .backdrop_color(p.scrim())
+        .show(ctx, |ui| {
+            ui.set_width(dialog_width);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            widgets::dialog_header(ui, |ui| {
+                widgets::dialog_title(ui, title, &p);
+                widgets::dialog_description(
+                    ui,
+                    if state.kind == ConnectionKind::Ssh {
+                        "Enter a host, user@host, or a full ssh command. The first connect trusts a new host key with accept-new."
+                    } else {
+                        "Point RustChamber at an OpenCode server that is already running."
+                    },
+                    &p,
+                );
+            });
+            ui.add_space(12.0);
+            if state.kind == ConnectionKind::Endpoint {
+                dialogs_connection_field(
+                    ui,
+                    &p,
+                    "Endpoint URL",
+                    "https://example.com",
+                    &mut state.value,
+                    false,
+                    Id::unique("connection-dialog/endpoint"),
+                );
+                ui.add_space(6.0);
+                dialogs_connection_field(
+                    ui,
+                    &p,
+                    "Password (optional)",
+                    "OPENCODE_PASSWORD",
+                    &mut state.password,
+                    true,
+                    Id::unique("connection-dialog/password"),
+                );
+                ui.add_space(6.0);
+            } else {
+                dialogs_connection_field(
+                    ui,
+                    &p,
+                    "Host or SSH command",
+                    "user@example.com",
+                    &mut state.value,
+                    false,
+                    Id::unique("connection-dialog/ssh"),
+                );
+                ui.add_space(6.0);
+                dialogs_connection_field(
+                    ui,
+                    &p,
+                    "Remote folder (optional)",
+                    ".",
+                    &mut state.remote_directory,
+                    false,
+                    Id::unique("connection-dialog/remote-directory"),
+                );
+                ui.add_space(6.0);
+            }
+            dialogs_connection_field(
+                ui,
+                &p,
+                "Server name (optional)",
+                "Production",
+                &mut state.name,
+                false,
+                Id::unique("connection-dialog/name"),
             );
-            if let Some(version) = &version {
+            let validation = connection_validation(&state);
+            if !state.value.trim().is_empty()
+                && let Err(error) = &validation
+            {
+                ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!("OpenCode {version}"))
-                        .font(theme::font_mono(11.5))
-                        .color(p.fg_muted),
+                    RichText::new(error)
+                        .font(theme::font(theme::TEXT_META))
+                        .color(p.error_text),
                 );
             }
+            ui.add_space(20.0);
+            widgets::dialog_footer(ui, |ui| {
+                if widgets::button_ex(
+                    ui,
+                    if editing { "Save changes" } else { "Add server" },
+                    Some(Icon::Check),
+                    widgets::ButtonVariant::Primary,
+                    widgets::ButtonSize::App,
+                    validation.is_ok(),
+                    &p,
+                )
+                .clicked()
+                {
+                    save = true;
+                }
+                if widgets::ghost_button(ui, "Cancel", None, &p).clicked() {
+                    cancel = true;
+                }
+            });
         });
-    });
-    section(ui, p, "Server connection", "", None, true, |ui| {
-        stacked_field(ui, p, "Endpoint", |ui| {
-            text_field(ui, &mut app.ui.settings_endpoint, "auto", false, p);
+    if cancel || modal.should_close() {
+        app.ui.connection_dialog = None;
+        return;
+    }
+    if save {
+        let draft = ConnectionDraft {
+            id: state.id.clone(),
+            name: state.name,
+            kind: state.kind,
+            value: state.value,
+            remote_directory: state.remote_directory,
+            password: (state.kind == ConnectionKind::Endpoint)
+                .then_some(state.password)
+                .filter(|password| !password.trim().is_empty()),
+        };
+        app.save_connection(draft);
+        app.ui.connection_dialog = None;
+        return;
+    }
+    app.ui.connection_dialog = Some(state);
+}
+
+fn connection_validation(state: &ConnectionDialogState) -> Result<(), String> {
+    let value = state.value.trim();
+    if value.is_empty() {
+        return Err(if state.kind == ConnectionKind::Ssh {
+            "Enter a host or an SSH command.".into()
+        } else {
+            "Enter an endpoint URL such as https://example.com.".into()
         });
-        ui.add_space(16.0);
-        stacked_field(ui, p, "Password", |ui| {
-            text_field(
-                ui,
-                &mut app.ui.settings_password,
-                "OPENCODE_PASSWORD",
-                true,
-                p,
-            );
+    }
+    match state.kind {
+        ConnectionKind::Endpoint => rchamber_api::ClientConfig::new(value)
+            .map(|_| ())
+            .map_err(|error| format!("Check the endpoint URL: {error}.")),
+        ConnectionKind::Ssh => rchamber_api::parse_target(value)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn remove_connection_dialog(ctx: &egui::Context, app: &mut RustChamber) {
+    let Some(id) = app.ui.confirm_remove_connection.clone() else {
+        return;
+    };
+    let p = app.palette.clone();
+    let name = app
+        .model
+        .connections
+        .find(&id)
+        .map(|connection| connection.display_name().to_string())
+        .unwrap_or_else(|| "this server".into());
+    let dialog_width = 380.0_f32.min((ctx.content_rect().width() - 48.0).max(260.0));
+    let mut remove = false;
+    let mut cancel = false;
+    let modal = egui::Modal::new(Id::unique("connection-remove-dialog"))
+        .frame(theme::dialog_frame(&p))
+        .backdrop_color(p.scrim())
+        .show(ctx, |ui| {
+            ui.set_width(dialog_width);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            widgets::dialog_header(ui, |ui| {
+                widgets::dialog_title(ui, "Remove server?", &p);
+                widgets::dialog_description(
+                    ui,
+                    &format!(
+                        "Delete the saved connection for {name}? RustChamber stops using it and any tunnel or remote process it started."
+                    ),
+                    &p,
+                );
+            });
+            ui.add_space(20.0);
+            widgets::dialog_footer(ui, |ui| {
+                if widgets::destructive_button(ui, "Remove", Some(Icon::Trash), &p).clicked() {
+                    remove = true;
+                }
+                if widgets::ghost_button(ui, "Cancel", None, &p).clicked() {
+                    cancel = true;
+                }
+            });
         });
-        ui.add_space(8.0);
-        let managed = app.ui.settings_endpoint.trim().is_empty();
-        muted(
-            ui,
-            p,
-            if managed {
-                "Managed server — RustChamber starts and supervises a local OpenCode process."
-            } else {
-                "External server — RustChamber only connects and never spawns a process."
-            },
-        );
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if widgets::primary_button(ui, "Apply & reconnect", Some(Icon::Refresh), p).clicked() {
-                app.apply_connection_settings();
-            }
-            if widgets::ghost_button(ui, "Restart", Some(Icon::Refresh), p).clicked() {
-                app.backend.send(Action::Reconnect);
-            }
-        });
-    });
+    if cancel || modal.should_close() {
+        app.ui.confirm_remove_connection = None;
+        return;
+    }
+    if remove {
+        app.delete_connection(&id);
+        app.ui.confirm_remove_connection = None;
+    }
 }
 
 fn shortcut(parts: &[&str], key: &str) -> Vec<String> {

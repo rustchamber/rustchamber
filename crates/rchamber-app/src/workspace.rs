@@ -58,6 +58,9 @@ pub struct ProjectEntry {
     pub color: Option<String>,
     pub hidden: bool,
     pub added_at: f64,
+    /// Saved server the project lives on. `None` means the local server.
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 impl ProjectEntry {
@@ -216,23 +219,48 @@ impl WorkspaceStore {
     }
 
     pub fn add_local_project(&mut self, directory: &str, name: Option<&str>) -> String {
+        self.add_project_at(directory, name, None)
+    }
+
+    pub fn add_remote_project(
+        &mut self,
+        directory: &str,
+        name: Option<&str>,
+        server: &str,
+    ) -> String {
+        self.add_project_at(directory, name, Some(server))
+    }
+
+    fn add_project_at(
+        &mut self,
+        directory: &str,
+        name: Option<&str>,
+        server: Option<&str>,
+    ) -> String {
         let canonical = normalize_path(directory);
         let name = name
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| directory_name(&canonical));
-        if let Some(entry) = self
-            .projects
-            .iter_mut()
-            .find(|entry| paths_match(&entry.canonical, &canonical))
-        {
+        if let Some(entry) = self.projects.iter_mut().find(|entry| {
+            paths_match(&entry.canonical, &canonical)
+                && (entry.server.as_deref() == server
+                    // Adopt entries saved before projects tracked their server.
+                    || (server.is_some() && entry.server.is_none() && !Path::new(&canonical).is_dir()))
+        }) {
+            if server.is_some() && entry.server.is_none() {
+                entry.server = server.map(str::to_string);
+            }
             if name != directory_name(&entry.canonical) {
                 entry.name_override = Some(name);
             }
             return entry.id.clone();
         }
-        let id = format!("dir:{canonical}");
+        let id = match server {
+            Some(server) => format!("dir:{server}:{canonical}"),
+            None => format!("dir:{canonical}"),
+        };
         self.projects.push(ProjectEntry {
             id: id.clone(),
             canonical,
@@ -241,6 +269,7 @@ impl WorkspaceStore {
             color: None,
             hidden: false,
             added_at: now_ms(),
+            server: server.map(str::to_string),
         });
         self.order.push(id.clone());
         id
@@ -487,6 +516,7 @@ mod tests {
             color: None,
             hidden: false,
             added_at,
+            server: None,
         }
     }
 
@@ -558,6 +588,40 @@ mod tests {
                 .map(|project| project.id.as_str()),
             Some("p1")
         );
+    }
+
+    #[test]
+    fn remote_projects_keep_their_server() {
+        let mut store = WorkspaceStore::default();
+        let local = store.add_local_project("/tmp/alpha", None);
+        let remote =
+            store.add_remote_project("/home/ubuntu/portfolio", Some("portfolio"), "conn:1");
+        assert_ne!(local, remote);
+        let entry = store
+            .projects
+            .iter()
+            .find(|project| project.id == remote)
+            .unwrap();
+        assert_eq!(entry.server.as_deref(), Some("conn:1"));
+        assert_eq!(entry.display_name(), "portfolio");
+
+        let other = store.add_remote_project("/home/ubuntu/portfolio", Some("portfolio"), "conn:2");
+        assert_ne!(remote, other, "same path on two servers stays separate");
+
+        assert_eq!(
+            store.add_remote_project("/home/ubuntu/portfolio", None, "conn:1"),
+            remote,
+            "re-adding on the same server reuses the entry"
+        );
+        assert_eq!(store.projects.len(), 3);
+    }
+
+    #[test]
+    fn projects_saved_without_a_server_still_load() {
+        let json = r#"{"version":3,"projects":[{"id":"dir:/tmp/alpha","canonical":"/tmp/alpha","name":"Alpha","name_override":null,"color":null,"hidden":false,"added_at":1.0}]}"#;
+        let store: WorkspaceStore = serde_json::from_str(json).unwrap();
+        assert_eq!(store.projects.len(), 1);
+        assert!(store.projects[0].server.is_none());
     }
 
     #[test]
