@@ -1,6 +1,8 @@
 use rchamber_ui::RustChamber;
 use tracing_subscriber::EnvFilter;
 
+mod platform;
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args
@@ -53,6 +55,7 @@ fn main() -> eframe::Result<()> {
         .init();
 
     let screenshot = std::env::var_os("RCHAMBER_SCREENSHOT").is_some();
+    platform::apply_scale_override();
     let mut size = [1320.0, 860.0];
     if let Ok(value) = std::env::var("RCHAMBER_WINDOW")
         && let Some((width, height)) = value.split_once('x')
