@@ -12,6 +12,9 @@ authors.workspace = true
 name = "rchamber"
 path = "src/main.rs"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb.workspace = true
+
 [dependencies]
 rchamber-api = { path = "../rchamber-api" }
 rchamber-app = { path = "../rchamber-app" }
