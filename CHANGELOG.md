@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**Server connections.** Settings → General now lists the managed OpenCode server, saved HTTP endpoints, and SSH hosts on one page. SSH starts `opencode serve` on the remote host and tunnels it through one loopback connection. Each SSH entry can set a remote folder. The first connection records a new host key. Add project lists every saved server by name and shows SSH projects as available. Projects imported from an SSH host remember that server and show its name as a badge beside the project in project lists. SSH failures now name the cause and the next step, and config files passed with `-F` stay inside the SSH directories.
+
+- The Changes surface is a real diff workbench: unified or split rows, intraline
+  emphasis, foldable hunks, a file-list toolbar, and stage, unstage and discard actions
+  backed by a small staging cache.
+- Every surface shares one spacing, radius and type scale, so the app reads as one piece:
+  session tabs and project monogram in the header and rail, project tags and a search band
+  in the sidebar, settings as a nav rail with a card grid and per-provider controls, and a
+  context panel with telemetry, touched files and recent commits.
+- Chat and the composer share a 760px column with lighter user turns, compact action rows,
+  reasoning on a hairline bar, and a one-line footer with model, mode and usage chips.
+- Added `docs/STANDARDS.md`, the engineering standards and production motives for the
+  codebase.
+- Added `docs/features/ssh-connections.md`, the plan for saved server connections with SSH
+  support. Implementation follows.
+
 ## 0.2.10 - 2026-11-09
 
 - Messages refresh again after a session moves between directories: the wrapped `previous`

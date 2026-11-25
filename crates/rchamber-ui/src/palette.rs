@@ -865,6 +865,7 @@ fn session_entries(app: &RustChamber, needle: &str, has_query: bool) -> Group {
 
 fn project_entries(app: &RustChamber, needle: &str) -> Group {
     let mut score = 0;
+    let server = app.model.connection_label(&app.model.active_server_key());
     let items = app
         .model
         .projects
@@ -879,7 +880,10 @@ fn project_entries(app: &RustChamber, needle: &str) -> Group {
         .take(RESULT_LIMIT)
         .map(|project| Entry {
             label: project.display_name(),
-            detail: project.canonical.clone(),
+            detail: match &server {
+                Some(server) => format!("{server} · {}", project.canonical),
+                None => project.canonical.clone(),
+            },
             icon: Icon::Folder,
             shortcut: None,
             command: Command::OpenProject(project.canonical.clone()),

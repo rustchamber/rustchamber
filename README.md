@@ -213,6 +213,7 @@ The output is `dist/RustChamber-<version>-linux-<arch>.tar.gz`.
 - **Appearance** — light and dark theme pairs, bundled Inter, JetBrains Mono, and Instrument
   Serif, plus density, type size, and motion controls.
 - **Command palette and shortcuts** — sessions, commands and settings from `⌘K`; every global shortcut can be searched and rebound in Settings → Shortcuts.
+- **Server connections** — a managed local server, saved HTTP endpoints, and SSH hosts that start `opencode serve` remotely and tunnel it over one connection.
 
 ![RustChamber chat with session context](docs/screenshots/chat.png)
 
@@ -229,16 +230,34 @@ The output is `dist/RustChamber-<version>-linux-<arch>.tar.gz`.
 By default RustChamber starts a managed `opencode serve` process on a free loopback port with
 a random password, then connects to it. The process is stopped when the app exits.
 
-To use an existing server, open **Settings → General** and set the endpoint and password.
-The same values can be written to the settings file:
+Open **Settings → General** to manage saved connections. The managed local server and saved
+endpoints or SSH hosts share the same page. The managed local server is always available and
+needs no entry. **Add server** saves an external HTTP endpoint; **Add SSH server** accepts a
+bare host, `user@host`, or a full command such as
+`ssh -p 2222 -i ~/.ssh/key user@example.com`. Set the optional remote folder to the
+directory the remote server should use. The SSH dialog rejects flags that replace the
+tunnel, `-o` keys that can run local commands, and re-validates the command on every
+connect.
+
+An SSH connection starts one `ssh` child that forwards a free loopback port, runs
+`opencode serve` on the remote host, and passes the server password over stdin. The remote
+host needs OpenCode 2.x, an `ssh` client, and the user's agent or keys. The first connection
+trusts and records a new host key with `StrictHostKeyChecking=accept-new`. Pre-populate
+`known_hosts` with `ssh-keyscan` or one manual `ssh` if you need to verify a fingerprint
+first. Flatpak installs run the host `ssh` through `flatpak-spawn`.
+
+Saved connections live next to the settings file:
 
 | Platform | Path |
 | --- | --- |
-| macOS | `~/Library/Application Support/rustchamber/settings.json` |
-| Linux | `~/.config/rustchamber/settings.json` |
-| Windows | `%APPDATA%\rustchamber\settings.json` |
+| macOS | `~/Library/Application Support/rustchamber/connections.json` |
+| Linux | `~/.config/rustchamber/connections.json` |
+| Windows | `%APPDATA%\rustchamber\connections.json` |
 
-The endpoint password is stored in that file as plain text.
+Endpoint passwords are stored in that file as plain text. SSH entries store no secret.
+The legacy endpoint and password in `settings.json` become the first saved connection and
+stop being authoritative after `connections.json` exists. The open project path is sent to
+the remote server and must also exist on that host; RustChamber does not translate paths.
 
 ### Workspace data
 

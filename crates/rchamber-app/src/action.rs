@@ -1,10 +1,11 @@
-use rchamber_api::LaunchOptions;
 use rchamber_api::PromptFile;
 use rchamber_api::models::{
     FileDiff, FileEntry, McpServer, Model, ModelRef, PermissionRequest, Project, ServerInfo,
     Session, VcsInfo,
 };
 use serde_json::Value;
+
+use crate::connections::{ConnectionDraft, SavedConnection};
 
 #[derive(Clone, Debug)]
 pub struct TrackedProject {
@@ -97,10 +98,14 @@ pub enum Action {
     LoadDirectory(String),
     LoadFile(String),
     SearchFiles(String),
-    Configure {
-        endpoint: Option<String>,
-        password: Option<String>,
-        workspace: Option<String>,
+    ConnectServer {
+        id: Option<String>,
+    },
+    SaveConnection {
+        draft: ConnectionDraft,
+    },
+    DeleteConnection {
+        id: String,
     },
     InstallExtension {
         path: String,
@@ -172,7 +177,10 @@ pub enum BackendEvent {
     Providers(Vec<rchamber_api::models::Provider>),
     Agents(Vec<rchamber_api::models::Agent>),
     Commands(Vec<rchamber_api::models::Command>),
-    Projects(Vec<Project>),
+    Projects {
+        connection: Option<String>,
+        projects: Vec<Project>,
+    },
     SessionMetadataUpdated(Box<Session>),
     SessionViewed {
         id: String,
@@ -218,6 +226,10 @@ pub enum BackendEvent {
         items: Vec<serde_json::Value>,
     },
     WorkspaceChanged(String),
+    Connections {
+        connections: Vec<SavedConnection>,
+        active: Option<String>,
+    },
     Extensions(Vec<rchamber_ext::InstalledExtension>),
     ExtensionInstalled {
         extension_id: String,
@@ -426,16 +438,6 @@ pub struct LaunchConfig {
     pub workspace: Option<String>,
     pub endpoint: Option<String>,
     pub password: Option<String>,
-}
-
-impl LaunchConfig {
-    pub fn into_options(&self) -> LaunchOptions {
-        LaunchOptions {
-            directory: self.workspace.as_ref().map(std::path::PathBuf::from),
-            binary: None,
-            port: None,
-            password: self.password.clone(),
-            external_url: self.endpoint.clone(),
-        }
-    }
+    pub ssh: Option<String>,
+    pub ssh_directory: Option<String>,
 }

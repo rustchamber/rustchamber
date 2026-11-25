@@ -38,20 +38,58 @@ Dependencies point downward: `rchamber` depends on `rchamber-ui`; the UI depends
 
 ## Server lifecycle
 
-With no endpoint configured, the backend looks for the `opencode` binary in `PATH` and in
-common install locations, then starts:
+The active connection is one of three shapes: the implicit managed local server, a saved
+HTTP endpoint, or a saved SSH target. `Action::ConnectServer` selects one and persists it as
+the last active connection; the next launch uses the same entry.
+
+For the managed server, the backend looks for the `opencode` binary in `PATH` and in common
+install locations, then starts:
 
 ```
-opencode serve --hostname 127.0.0.1 --port <free> --env OPENCODE_PASSWORD=<random>
+OPENCODE_PASSWORD=<random> opencode serve --hostname 127.0.0.1 --port <free>
 ```
 
 It reads stdout and stderr into the log, polls `/api/info` until the server answers (45 s
 budget), and keeps the child handle tied to the client. Dropping the client kills the child.
-When an external endpoint is configured, no process is spawned and the password comes from
-the settings file or `OPENCODE_PASSWORD`.
+For an external endpoint, no process is spawned and the password comes from the saved
+connection.
 
 Authentication is HTTP Basic with the username `opencode`. Requests scoped to a workspace
 also send `x-opencode-directory` and a `directory` query parameter.
+
+## Connections
+
+`connections.json` is the authority for saved servers. Each entry has an id, name, kind,
+raw endpoint or SSH command, optional remote folder, optional endpoint password, creation
+time, and last use. The
+file uses atomic private writes, moves corrupt files aside, and backs up a future version
+before defaults load. The legacy settings endpoint seeds the first entry once; after that
+the settings fields are ignored.
+
+SSH targets are tokenized with `shell-words`, never a shell. The parser keeps `-p`, `-i`,
+`-J`, `-F`, `-l`, safe `-o` keys, and simple boolean flags. It rejects transport flags such
+as `-N`, `-L`, `-R`, `-D`, and `-W`, agent forwarding, and `-o` keys that can run local
+commands or change the tunnel. A user supplied `-F` config is trusted like a manual `ssh`
+invocation. One ssh child carries both the tunnel and the remote server:
+
+```
+ssh -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+    -o StrictHostKeyChecking=accept-new -o BatchMode=yes <user args> \
+    -L 127.0.0.1:<local>:127.0.0.1:<remote> <host> \
+    sh -c 'read password; ... opencode serve --hostname 127.0.0.1 --port <remote>'
+```
+
+The remote command checks for OpenCode 2.x, reads the random password from stdin, exports
+the server password variables, then starts the server in the background. A foreground
+reader holds the channel open; closing local stdin or losing ssh makes the remote shell
+kill the server. A remote bind collision retries with a new remote port up to three times.
+The client connects to the local loopback port, so the rest of the app treats SSH exactly
+like an endpoint. The ssh child and its stdin hang off `ServerHandle`; dropping the handle
+kills both. The backend also checks the ssh child once per second and reconnects if the
+tunnel dies. Flatpak routes the host `ssh` through `flatpak-spawn --host`. Project lists
+are cached per connection, so the Add project dialog shows one rail entry per saved server
+and imports from the server that reported the project. SSH startup failures are classified
+into a cause, the ssh evidence, and a next step, so the UI never shows a bare exit status.
 
 ## Events
 
@@ -90,9 +128,9 @@ Drafts are flushed 500 ms after the last edit. Window and panel geometry live in
 settings file.
 
 Projects, folders, display preferences, and new-session drafts live in `workspace.json`,
-separate from settings. The file is written through a process-wide lock and a unique
-temporary file, then renamed into place. A corrupt file is moved aside instead of being
-overwritten silently.
+separate from settings. Saved servers live in `connections.json`. Both files are written
+through a process-wide lock and a unique temporary file, then renamed into place. A corrupt
+file is moved aside instead of being overwritten silently.
 
 RustChamber does not import the whole OpenCode session history. `AppModel::tracked_projects`
 turns the local project registry into a small set of directories; the backend lists only

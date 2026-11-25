@@ -12,6 +12,7 @@ use crate::action::{
     BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind, TrackedProject,
 };
 use crate::attachments::AttachmentItem;
+use crate::connections::{ConnectionKind, ConnectionsStore};
 use crate::snippets::Snippet;
 use crate::workspace::{ProjectEntry, WorkspaceStore, paths_match};
 
@@ -288,7 +289,9 @@ pub struct AppModel {
     pub session_previews: HashMap<String, String>,
     pub preview_pending: HashSet<String>,
     pub projects: Vec<Project>,
+    pub projects_by_connection: HashMap<String, Vec<Project>>,
     pub workspace_store: WorkspaceStore,
+    pub connections: ConnectionsStore,
     pub models: Vec<Model>,
     pub providers: Vec<Provider>,
     pub agents: Vec<Agent>,
@@ -331,7 +334,9 @@ impl Default for AppModel {
             session_previews: HashMap::new(),
             preview_pending: HashSet::new(),
             projects: Vec::new(),
+            projects_by_connection: HashMap::new(),
             workspace_store: WorkspaceStore::load(),
+            connections: ConnectionsStore::load(),
             models: Vec::new(),
             providers: Vec::new(),
             agents: Vec::new(),
@@ -458,8 +463,16 @@ impl AppModel {
             BackendEvent::Providers(providers) => self.providers = providers,
             BackendEvent::Agents(agents) => self.agents = agents,
             BackendEvent::Commands(commands) => self.commands = commands,
-            BackendEvent::Projects(projects) => {
-                self.projects = projects;
+            BackendEvent::Projects {
+                connection,
+                projects,
+            } => {
+                let key = crate::connections::server_key(connection.as_deref());
+                self.projects_by_connection
+                    .insert(key.clone(), projects.clone());
+                if key == self.active_server_key() {
+                    self.projects = projects;
+                }
             }
             BackendEvent::SessionMetadataUpdated(session) => {
                 let session = *session;
@@ -531,6 +544,12 @@ impl AppModel {
                 }
             }
             BackendEvent::Toast { kind, message } => self.toast(kind, message),
+            BackendEvent::Connections {
+                connections,
+                active,
+            } => {
+                self.connections.replace_entries(connections, active);
+            }
             BackendEvent::WorkspaceChanged(directory) => {
                 self.save_draft();
                 self.workspace = Some(directory.clone());
@@ -1201,6 +1220,54 @@ impl AppModel {
         self.workspace_store.ordered_projects()
     }
 
+    /// Stable key for the server the window is currently connected to.
+    pub fn active_server_key(&self) -> String {
+        crate::connections::server_key(self.connections.active_id())
+    }
+
+    pub fn projects_for_connection(&self, key: &str) -> &[Project] {
+        self.projects_by_connection
+            .get(key)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// Human name for a saved server, or `None` for the local server.
+    pub fn connection_label(&self, key: &str) -> Option<String> {
+        if key == crate::connections::LOCAL_SERVER_KEY {
+            return None;
+        }
+        self.connections
+            .connections()
+            .iter()
+            .find(|connection| connection.id == key)
+            .map(|connection| connection.display_name())
+    }
+
+    /// Server label for a project, shown as a badge in project lists. Falls
+    /// back to the remote listings for entries saved before projects tracked
+    /// their server.
+    pub fn project_server(&self, project: &ProjectEntry) -> Option<String> {
+        if let Some(key) = project.server.as_deref() {
+            return self.connection_label(key);
+        }
+        if std::path::Path::new(&project.canonical).is_dir() {
+            return None;
+        }
+        let mut matches = self.connections.connections().iter().filter(|connection| {
+            connection.kind == ConnectionKind::Ssh
+                && self
+                    .projects_for_connection(&connection.id)
+                    .iter()
+                    .any(|remote| paths_match(&remote.canonical, &project.canonical))
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first.display_name())
+    }
+
     pub fn project_by_id(&self, id: &str) -> Option<&ProjectEntry> {
         self.workspace_store
             .projects
@@ -1214,6 +1281,19 @@ impl AppModel {
 
     pub fn add_project(&mut self, directory: &str, name: Option<&str>) -> String {
         let id = self.workspace_store.add_local_project(directory, name);
+        self.workspace_store.save();
+        id
+    }
+
+    pub fn add_remote_project(
+        &mut self,
+        directory: &str,
+        name: Option<&str>,
+        server: &str,
+    ) -> String {
+        let id = self
+            .workspace_store
+            .add_remote_project(directory, name, server);
         self.workspace_store.save();
         id
     }

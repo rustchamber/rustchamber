@@ -86,11 +86,19 @@ pub fn show(ui: &mut Ui, app: &mut RustChamber) {
                                 busy,
                                 edge.left(),
                             )
-                            .on_hover_text(format!(
-                                "{}\n{}",
-                                project.display_name(),
-                                project.canonical
-                            ));
+                            .on_hover_text(
+                                match app.model.project_server(project) {
+                                    Some(server) => format!(
+                                        "{}\n{}\n{}",
+                                        project.display_name(),
+                                        project.canonical,
+                                        server
+                                    ),
+                                    None => {
+                                        format!("{}\n{}", project.display_name(), project.canonical)
+                                    }
+                                },
+                            );
                             if response.clicked() {
                                 app.select_project(&project.id);
                             }
