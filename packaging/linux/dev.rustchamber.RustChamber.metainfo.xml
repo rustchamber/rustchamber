@@ -59,6 +59,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.11" date="2026-11-26">
+      <description>
+        <p>Extension workers run in their own process, with per-extension logs and a failed-call counter, plus a denser workbench and clearer panel dividers.</p>
+      </description>
+    </release>
     <release version="0.2.10" date="2026-11-09">
       <description>
         <p>Fix message refresh after a session moves directories, and fit extension panels to their content.</p>
