@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use rchamber_ext::{
     ExtensionStorage, HostBridge, HostCall, HostContext, HostEffect, InstallSource,
-    InstalledExtension, Registry, Widget, WorkerEvent, WorkerHandle, WorkerRequest,
-    spawn_with_events,
+    InstalledExtension, ProcessSpawn, Registry, Widget, WorkerEvent, WorkerHandle, WorkerRequest,
+    spawn_process, spawn_thread,
 };
 use serde_json::Value as Json;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -129,6 +129,12 @@ impl HostBridge for ExtensionBridge {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Isolation {
+    Process,
+    Thread,
+}
+
 pub struct ExtensionHost {
     registry: Registry,
     workers: HashMap<String, WorkerHandle>,
@@ -141,10 +147,24 @@ pub struct ExtensionHost {
     pending_calls: HashSet<String>,
     failed: HashSet<String>,
     context: HostContext,
+    isolation: Isolation,
+    worker_command: Option<PathBuf>,
 }
 
 impl ExtensionHost {
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self::with_isolation(root, Isolation::Process, std::env::current_exe().ok())
+    }
+
+    pub fn in_process(root: impl Into<PathBuf>) -> Self {
+        Self::with_isolation(root, Isolation::Thread, None)
+    }
+
+    pub fn with_isolation(
+        root: impl Into<PathBuf>,
+        isolation: Isolation,
+        worker_command: Option<PathBuf>,
+    ) -> Self {
         let registry = Registry::load(root);
         let (event_tx, events) = unbounded_channel();
         let (bridge_tx, bridge_rx) = unbounded_channel();
@@ -160,6 +180,8 @@ impl ExtensionHost {
             pending_calls: HashSet::new(),
             failed: HashSet::new(),
             context: HostContext::default(),
+            isolation,
+            worker_command,
         }
     }
 
@@ -205,8 +227,7 @@ impl ExtensionHost {
             .collect();
         for id in stale {
             if let Some(worker) = self.workers.remove(&id) {
-                worker.cancel.store(true, Ordering::Relaxed);
-                let _ = worker.requests.send(WorkerRequest::Shutdown);
+                worker.stop();
             }
         }
         for (id, extension) in active {
@@ -214,32 +235,72 @@ impl ExtensionHost {
                 continue;
             }
             let storage_path = extension.storage_path(self.registry.root());
-            let storage = ExtensionStorage::load(&storage_path).unwrap_or_default();
             let cancel = Arc::new(AtomicBool::new(false));
-            let bridge = Box::new(ExtensionBridge::new(
-                id.clone(),
-                self.bridge_tx.clone(),
-                storage_path,
-                storage,
-                cancel.clone(),
-            ));
-            let worker = spawn_with_events(
-                extension.manifest.clone(),
-                extension.root.clone(),
-                extension.grants.clone(),
-                bridge,
-                self.context.clone(),
-                self.event_tx.clone(),
-                cancel,
-            );
+            let worker = self.start_worker(&extension, storage_path, cancel);
             self.workers.insert(id, worker);
         }
     }
 
+    fn start_worker(
+        &mut self,
+        extension: &InstalledExtension,
+        storage_path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    ) -> WorkerHandle {
+        if self.isolation == Isolation::Process
+            && let Some(command) = self.worker_command.clone()
+        {
+            let spawn = ProcessSpawn {
+                command,
+                manifest: extension.manifest.clone(),
+                root: extension.root.clone(),
+                grants: extension.grants.clone(),
+                storage: storage_path.clone(),
+                context: self.context.clone(),
+                event_tx: self.event_tx.clone(),
+                cancel: cancel.clone(),
+            };
+            match spawn_process(spawn) {
+                Ok(worker) => return worker,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "rchamber_ext",
+                        extension = %extension.manifest.id,
+                        %error,
+                        "could not start the extension process; running in-process instead"
+                    );
+                    let _ = self.event_tx.send(WorkerEvent::Log {
+                        id: extension.manifest.id.clone(),
+                        level: "warn".into(),
+                        message: format!(
+                            "Could not start the extension process ({error}). Running in-process instead."
+                        ),
+                    });
+                }
+            }
+        }
+        let storage = ExtensionStorage::load(&storage_path).unwrap_or_default();
+        let bridge = Box::new(ExtensionBridge::new(
+            extension.manifest.id.clone(),
+            self.bridge_tx.clone(),
+            storage_path,
+            storage,
+            cancel.clone(),
+        ));
+        spawn_thread(
+            extension.manifest.clone(),
+            extension.root.clone(),
+            extension.grants.clone(),
+            bridge,
+            self.context.clone(),
+            self.event_tx.clone(),
+            cancel,
+        )
+    }
+
     pub fn shutdown(&mut self) {
         for worker in self.workers.drain() {
-            worker.1.cancel.store(true, Ordering::Relaxed);
-            let _ = worker.1.requests.send(WorkerRequest::Shutdown);
+            worker.1.stop();
         }
         self.pending_calls.clear();
     }
@@ -349,6 +410,12 @@ impl ExtensionHost {
     pub fn worker_event(&mut self, event: WorkerEvent) -> Option<BackendEvent> {
         match event {
             WorkerEvent::Ready { .. } => None,
+            WorkerEvent::Log { id, level, message } => Some(BackendEvent::ExtensionLog {
+                extension_id: id,
+                level,
+                message,
+            }),
+            WorkerEvent::Effect { .. } | WorkerEvent::HostCall { .. } => None,
             WorkerEvent::Result {
                 call_id,
                 id,
@@ -401,7 +468,9 @@ impl ExtensionHost {
                     || message.contains("timed out")
                 {
                     self.failed.insert(id.clone());
-                    self.workers.remove(&id);
+                    if let Some(worker) = self.workers.remove(&id) {
+                        worker.stop();
+                    }
                 }
                 if let Some(key) = call_id.strip_prefix("block:") {
                     self.pending_blocks.remove(key);
@@ -457,10 +526,7 @@ impl ExtensionHost {
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         self.failed.remove(id);
         if let Some(worker) = self.workers.remove(id) {
-            worker
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = worker.requests.send(WorkerRequest::Shutdown);
+            worker.stop();
         }
         self.registry
             .remove(id)
@@ -474,10 +540,7 @@ impl ExtensionHost {
     pub fn reload(&mut self, id: &str) -> Result<(), String> {
         self.failed.remove(id);
         if let Some(worker) = self.workers.remove(id) {
-            worker
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = worker.requests.send(WorkerRequest::Shutdown);
+            worker.stop();
         }
         self.registry
             .reload(id)
@@ -600,7 +663,7 @@ end
         )
         .unwrap();
         let root = dir.path().join("registry");
-        let mut host = ExtensionHost::new(&root);
+        let mut host = ExtensionHost::in_process(&root);
         host.install_path(&package).unwrap();
         host.approve("demo", vec!["storage".into()]).unwrap();
         host.ensure_workers();

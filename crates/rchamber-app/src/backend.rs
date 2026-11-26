@@ -18,7 +18,7 @@ use crate::extensions::{BridgeMessage, ExtensionHost};
 use crate::live;
 use crate::snippets;
 use crate::workspace::paths_match;
-use rchamber_ext::{HostCall, HostContext, SessionContext};
+use rchamber_ext::{HostCall, HostContext, SessionContext, WorkerEvent, WorkerRequest};
 use serde_json::json;
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
@@ -26,6 +26,7 @@ pub type Wake = Arc<dyn Fn() + Send + Sync>;
 const MCP_SETTLE_ATTEMPTS: u32 = 8;
 const MCP_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const SESSIONS_PER_PROJECT: u32 = 100;
+const HOST_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn confine_extension_path(
     base: &std::path::Path,
@@ -232,9 +233,7 @@ impl Inner {
                         self.flush().await;
                     }
                     Some(event) = self.extensions.events.recv() => {
-                        if let Some(event) = self.extensions.worker_event(event) {
-                            self.emit(event);
-                        }
+                        self.worker_event(event).await;
                     }
                     Some(message) = self.extensions.bridge_rx.recv() => {
                         self.extension_bridge(message).await;
@@ -1030,6 +1029,30 @@ impl Inner {
         self.next_extension_status = Some(next.max(now + Duration::from_millis(250)));
     }
 
+    async fn worker_event(&mut self, event: WorkerEvent) {
+        match event {
+            WorkerEvent::HostCall {
+                id,
+                request_id,
+                call,
+                reply,
+            } => {
+                self.dispatch_host_call(id, call, ReplySink::Worker { reply, request_id })
+                    .await;
+            }
+            WorkerEvent::Effect { id, effect } => {
+                if self.extensions.is_active(&id) {
+                    self.host_effect(&id, effect).await;
+                }
+            }
+            other => {
+                if let Some(event) = self.extensions.worker_event(other) {
+                    self.emit(event);
+                }
+            }
+        }
+    }
+
     async fn extension_bridge(&mut self, message: BridgeMessage) {
         match message {
             BridgeMessage::Call {
@@ -1037,12 +1060,8 @@ impl Inner {
                 call,
                 reply,
             } => {
-                let answer = if self.extensions.is_active(&extension_id) {
-                    self.host_call(&extension_id, call).await
-                } else {
-                    Err("the extension is no longer active".into())
-                };
-                let _ = reply.send(answer);
+                self.dispatch_host_call(extension_id, call, ReplySink::Bridge(reply))
+                    .await;
             }
             BridgeMessage::Effect {
                 extension_id,
@@ -1055,173 +1074,29 @@ impl Inner {
         }
     }
 
-    async fn host_call(
-        &mut self,
-        _extension_id: &str,
-        call: HostCall,
-    ) -> Result<serde_json::Value, String> {
-        match call {
-            HostCall::Http {
-                method,
-                url,
-                headers,
-                body,
-            } => {
-                let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(20))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| error.to_string())?;
-                let method = reqwest::Method::from_bytes(method.as_bytes())
-                    .map_err(|error| error.to_string())?;
-                let mut request = client.request(method, &url);
-                for (name, value) in headers {
-                    request = request.header(name, value);
-                }
-                if let Some(body) = body {
-                    request = request.body(body);
-                }
-                let mut response = request.send().await.map_err(|error| error.to_string())?;
-                let status = response.status().as_u16();
-                if response
-                    .content_length()
-                    .is_some_and(|length| length > 2 * 1024 * 1024)
-                {
-                    return Err("the response is larger than 2 MiB".into());
-                }
-                let mut bytes = Vec::new();
-                while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
-                    bytes.extend_from_slice(&chunk);
-                    if bytes.len() > 2 * 1024 * 1024 {
-                        return Err("the response is larger than 2 MiB".into());
-                    }
-                }
-                Ok(json!({
-                    "status": status,
-                    "body": String::from_utf8_lossy(&bytes),
-                }))
-            }
-            HostCall::ReadFile { path } => {
-                let path = self.extension_path(&path)?;
-                let mut file = tokio::fs::File::open(&path)
+    async fn dispatch_host_call(&mut self, extension_id: String, call: HostCall, reply: ReplySink) {
+        if !self.extensions.is_active(&extension_id) {
+            reply.send(Err("the extension is no longer active".into()));
+            return;
+        }
+        if runs_off_loop(&call) {
+            let env = self.host_env();
+            tokio::spawn(async move {
+                let result = tokio::time::timeout(HOST_CALL_TIMEOUT, env.call(call))
                     .await
-                    .map_err(|error| error.to_string())?;
-                let mut bytes = Vec::new();
-                tokio::io::AsyncReadExt::read_to_end(
-                    &mut tokio::io::AsyncReadExt::take(&mut file, 2 * 1024 * 1024 + 1),
-                    &mut bytes,
-                )
+                    .unwrap_or_else(|_| Err("the extension host did not answer in time".into()));
+                reply.send(result);
+            });
+        } else {
+            let result = tokio::time::timeout(HOST_CALL_TIMEOUT, self.host_call_inline(call))
                 .await
-                .map_err(|error| error.to_string())?;
-                if bytes.len() > 2 * 1024 * 1024 {
-                    return Err("the file is larger than 2 MiB".into());
-                }
-                Ok(json!({
-                    "content": String::from_utf8_lossy(&bytes),
-                    "path": path.to_string_lossy(),
-                }))
-            }
-            HostCall::WriteFile { path, content } => {
-                let path = self.extension_path(&path)?;
-                if content.len() > 1024 * 1024 {
-                    return Err("the content is larger than 1 MiB".into());
-                }
-                if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                tokio::fs::write(&path, content)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(json!({ "path": path.to_string_lossy() }))
-            }
-            HostCall::ListDir { path } => {
-                let path = self.extension_path(&path)?;
-                let mut entries = Vec::new();
-                let mut reader = tokio::fs::read_dir(&path)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                while let Some(entry) = reader
-                    .next_entry()
-                    .await
-                    .map_err(|error| error.to_string())?
-                {
-                    if entries.len() >= 500 {
-                        break;
-                    }
-                    let kind = entry.file_type().await.ok().map(|kind| {
-                        if kind.is_dir() {
-                            "directory"
-                        } else if kind.is_file() {
-                            "file"
-                        } else {
-                            "other"
-                        }
-                    });
-                    entries.push(json!({
-                        "name": entry.file_name().to_string_lossy(),
-                        "kind": kind.unwrap_or("other"),
-                    }));
-                }
-                Ok(serde_json::Value::Array(entries))
-            }
-            HostCall::Stat { path } => {
-                let path = self.extension_path(&path)?;
-                match tokio::fs::metadata(&path).await {
-                    Ok(metadata) => Ok(json!({
-                        "kind": if metadata.is_dir() { "directory" } else if metadata.is_file() { "file" } else { "other" },
-                        "size": metadata.len(),
-                    })),
-                    Err(_) => Ok(json!({ "kind": "missing" })),
-                }
-            }
-            HostCall::SessionsList => {
-                let Some(client) = self.client.clone() else {
-                    return Err("not connected to OpenCode".into());
-                };
-                let sessions = client
-                    .list_sessions(200)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(serde_json::Value::Array(
-                    sessions
-                        .into_iter()
-                        .map(|session| {
-                            json!({
-                                "id": session.id,
-                                "title": session.title(),
-                                "directory": session.directory(),
-                            })
-                        })
-                        .collect(),
-                ))
-            }
-            HostCall::SessionStart { project, title } => {
-                let Some(client) = self.client.clone() else {
-                    return Err("not connected to OpenCode".into());
-                };
-                let directory = project
-                    .or_else(|| self.config.workspace.clone())
-                    .ok_or_else(|| "no project is open".to_string())?;
-                if !self.tracked.is_empty()
-                    && !self
-                        .tracked
-                        .iter()
-                        .any(|tracked| paths_match(&tracked.directory, &directory))
-                {
-                    return Err("the project is not tracked by RustChamber".into());
-                }
-                let session = client
-                    .create_session(&directory, title.as_deref(), None, None, None)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                self.emit(BackendEvent::SessionUpsert(Box::new(session.clone())));
-                Ok(json!({
-                    "id": session.id,
-                    "title": session.title(),
-                }))
-            }
+                .unwrap_or_else(|_| Err("the extension host did not answer in time".into()));
+            reply.send(result);
+        }
+    }
+
+    async fn host_call_inline(&mut self, call: HostCall) -> Result<serde_json::Value, String> {
+        match call {
             HostCall::SessionOpen { id } => {
                 self.emit(BackendEvent::ExtensionOpenSession(id));
                 Ok(json!({}))
@@ -1240,88 +1115,22 @@ impl Inner {
             HostCall::Generate { .. } => {
                 Err("text generation with the small model is not available in this build".into())
             }
-            HostCall::Exec { command, args, cwd } => {
-                let cwd = match cwd {
-                    Some(cwd) => self.extension_path(&cwd)?,
-                    None => std::path::PathBuf::from(
-                        self.config
-                            .workspace
-                            .clone()
-                            .ok_or_else(|| "no project is open".to_string())?,
-                    ),
-                };
-                let mut process = tokio::process::Command::new(&command);
-                process
-                    .args(&args)
-                    .current_dir(&cwd)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .kill_on_drop(true);
-                let mut child = process.spawn().map_err(|error| error.to_string())?;
-                let stdout = child.stdout.take();
-                let stderr = child.stderr.take();
-                let run = async {
-                    let read = |pipe: Option<tokio::process::ChildStdout>, limit: usize| async move {
-                        let Some(mut pipe) = pipe else {
-                            return Ok::<Vec<u8>, String>(Vec::new());
-                        };
-                        let mut bytes = Vec::new();
-                        tokio::io::AsyncReadExt::read_to_end(
-                            &mut tokio::io::AsyncReadExt::take(&mut pipe, limit as u64 + 1),
-                            &mut bytes,
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?;
-                        Ok(bytes)
-                    };
-                    let err_read = async {
-                        let Some(mut pipe) = stderr else {
-                            return Ok::<Vec<u8>, String>(Vec::new());
-                        };
-                        let mut bytes = Vec::new();
-                        tokio::io::AsyncReadExt::read_to_end(
-                            &mut tokio::io::AsyncReadExt::take(&mut pipe, 64 * 1024 + 1),
-                            &mut bytes,
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?;
-                        Ok(bytes)
-                    };
-                    let (stdout, stderr, status) =
-                        tokio::join!(read(stdout, 256 * 1024), err_read, child.wait());
-                    Ok::<_, String>((stdout?, stderr?, status.map_err(|e| e.to_string())?))
-                };
-                let (stdout, stderr, status) = tokio::time::timeout(Duration::from_secs(20), run)
-                    .await
-                    .map_err(|_| "the command timed out".to_string())?
-                    .map_err(|error: String| error)?;
-                let mut stdout = String::from_utf8_lossy(&stdout).to_string();
-                let mut stderr = String::from_utf8_lossy(&stderr).to_string();
-                if stdout.len() > 256 * 1024 {
-                    stdout.truncate(256 * 1024);
-                    stdout.push_str("\n… truncated");
-                }
-                if stderr.len() > 64 * 1024 {
-                    stderr.truncate(64 * 1024);
-                    stderr.push_str("\n… truncated");
-                }
-                Ok(json!({
-                    "status": status.code(),
-                    "stdout": stdout,
-                    "stderr": stderr,
-                }))
-            }
+            other => self.host_env().call(other).await,
         }
     }
 
-    fn extension_path(&self, value: &str) -> Result<std::path::PathBuf, String> {
-        let base = self
-            .config
-            .workspace
-            .clone()
-            .ok_or_else(|| "no project is open".to_string())?;
-        confine_extension_path(std::path::Path::new(&base), value)
+    fn host_env(&self) -> HostEnv {
+        HostEnv {
+            client: self.client.clone(),
+            workspace: self.config.workspace.clone(),
+            tracked: self
+                .tracked
+                .iter()
+                .map(|project| project.directory.clone())
+                .collect(),
+            tx: self.tx.clone(),
+            wake: self.wake.clone(),
+        }
     }
 
     async fn host_effect(&mut self, extension_id: &str, effect: rchamber_ext::HostEffect) {
@@ -2072,6 +1881,299 @@ async fn view_session(client: &Client, id: &str) -> Result<Option<f64>, ApiError
     Ok(Some(idle))
 }
 
+enum ReplySink {
+    Bridge(std::sync::mpsc::Sender<Result<serde_json::Value, String>>),
+    Worker {
+        reply: UnboundedSender<WorkerRequest>,
+        request_id: u64,
+    },
+}
+
+impl ReplySink {
+    fn send(self, result: Result<serde_json::Value, String>) {
+        match self {
+            ReplySink::Bridge(sender) => {
+                let _ = sender.send(result);
+            }
+            ReplySink::Worker { reply, request_id } => {
+                let _ = reply.send(WorkerRequest::Reply { request_id, result });
+            }
+        }
+    }
+}
+
+fn runs_off_loop(call: &HostCall) -> bool {
+    !matches!(
+        call,
+        HostCall::SessionOpen { .. } | HostCall::Prompt { .. } | HostCall::Generate { .. }
+    )
+}
+
+#[derive(Clone)]
+struct HostEnv {
+    client: Option<Client>,
+    workspace: Option<String>,
+    tracked: Vec<String>,
+    tx: UnboundedSender<BackendEvent>,
+    wake: Wake,
+}
+
+impl HostEnv {
+    fn emit(&self, event: BackendEvent) {
+        tracing::debug!(target: "rchamber::event", kind = event_kind(&event), "emit");
+        let _ = self.tx.send(event);
+        (self.wake)();
+    }
+
+    fn extension_path(&self, value: &str) -> Result<std::path::PathBuf, String> {
+        let base = self
+            .workspace
+            .clone()
+            .ok_or_else(|| "no project is open".to_string())?;
+        confine_extension_path(std::path::Path::new(&base), value)
+    }
+
+    async fn call(&self, call: HostCall) -> Result<serde_json::Value, String> {
+        match call {
+            HostCall::Http {
+                method,
+                url,
+                headers,
+                body,
+            } => {
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(20))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| error.to_string())?;
+                let method = reqwest::Method::from_bytes(method.as_bytes())
+                    .map_err(|error| error.to_string())?;
+                let mut request = client.request(method, &url);
+                for (name, value) in headers {
+                    request = request.header(name, value);
+                }
+                if let Some(body) = body {
+                    request = request.body(body);
+                }
+                let mut response = request.send().await.map_err(|error| error.to_string())?;
+                let status = response.status().as_u16();
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > 2 * 1024 * 1024)
+                {
+                    return Err("the response is larger than 2 MiB".into());
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+                    bytes.extend_from_slice(&chunk);
+                    if bytes.len() > 2 * 1024 * 1024 {
+                        return Err("the response is larger than 2 MiB".into());
+                    }
+                }
+                Ok(json!({
+                    "status": status,
+                    "body": String::from_utf8_lossy(&bytes),
+                }))
+            }
+            HostCall::ReadFile { path } => {
+                let path = self.extension_path(&path)?;
+                let mut file = tokio::fs::File::open(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut bytes = Vec::new();
+                tokio::io::AsyncReadExt::read_to_end(
+                    &mut tokio::io::AsyncReadExt::take(&mut file, 2 * 1024 * 1024 + 1),
+                    &mut bytes,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                if bytes.len() > 2 * 1024 * 1024 {
+                    return Err("the file is larger than 2 MiB".into());
+                }
+                Ok(json!({
+                    "content": String::from_utf8_lossy(&bytes),
+                    "path": path.to_string_lossy(),
+                }))
+            }
+            HostCall::WriteFile { path, content } => {
+                let path = self.extension_path(&path)?;
+                if content.len() > 1024 * 1024 {
+                    return Err("the content is larger than 1 MiB".into());
+                }
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                tokio::fs::write(&path, content)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({ "path": path.to_string_lossy() }))
+            }
+            HostCall::ListDir { path } => {
+                let path = self.extension_path(&path)?;
+                let mut entries = Vec::new();
+                let mut reader = tokio::fs::read_dir(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                while let Some(entry) = reader
+                    .next_entry()
+                    .await
+                    .map_err(|error| error.to_string())?
+                {
+                    if entries.len() >= 500 {
+                        break;
+                    }
+                    let kind = entry.file_type().await.ok().map(|kind| {
+                        if kind.is_dir() {
+                            "directory"
+                        } else if kind.is_file() {
+                            "file"
+                        } else {
+                            "other"
+                        }
+                    });
+                    entries.push(json!({
+                        "name": entry.file_name().to_string_lossy(),
+                        "kind": kind.unwrap_or("other"),
+                    }));
+                }
+                Ok(serde_json::Value::Array(entries))
+            }
+            HostCall::Stat { path } => {
+                let path = self.extension_path(&path)?;
+                match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => Ok(json!({
+                        "kind": if metadata.is_dir() { "directory" } else if metadata.is_file() { "file" } else { "other" },
+                        "size": metadata.len(),
+                    })),
+                    Err(_) => Ok(json!({ "kind": "missing" })),
+                }
+            }
+            HostCall::SessionsList => {
+                let Some(client) = self.client.clone() else {
+                    return Err("not connected to OpenCode".into());
+                };
+                let sessions = client
+                    .list_sessions(200)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(serde_json::Value::Array(
+                    sessions
+                        .into_iter()
+                        .map(|session| {
+                            json!({
+                                "id": session.id,
+                                "title": session.title(),
+                                "directory": session.directory(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
+            HostCall::SessionStart { project, title } => {
+                let Some(client) = self.client.clone() else {
+                    return Err("not connected to OpenCode".into());
+                };
+                let directory = project
+                    .or_else(|| self.workspace.clone())
+                    .ok_or_else(|| "no project is open".to_string())?;
+                if !self.tracked.is_empty()
+                    && !self
+                        .tracked
+                        .iter()
+                        .any(|tracked| paths_match(tracked, &directory))
+                {
+                    return Err("the project is not tracked by RustChamber".into());
+                }
+                let session = client
+                    .create_session(&directory, title.as_deref(), None, None, None)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                self.emit(BackendEvent::SessionUpsert(Box::new(session.clone())));
+                Ok(json!({
+                    "id": session.id,
+                    "title": session.title(),
+                }))
+            }
+            HostCall::Exec { command, args, cwd } => {
+                let cwd = match cwd {
+                    Some(cwd) => self.extension_path(&cwd)?,
+                    None => std::path::PathBuf::from(
+                        self.workspace
+                            .clone()
+                            .ok_or_else(|| "no project is open".to_string())?,
+                    ),
+                };
+                let mut process = tokio::process::Command::new(&command);
+                process
+                    .args(&args)
+                    .current_dir(&cwd)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true);
+                let mut child = process.spawn().map_err(|error| error.to_string())?;
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+                let run = async {
+                    let read = |pipe: Option<tokio::process::ChildStdout>, limit: usize| async move {
+                        let Some(mut pipe) = pipe else {
+                            return Ok::<Vec<u8>, String>(Vec::new());
+                        };
+                        let mut bytes = Vec::new();
+                        tokio::io::AsyncReadExt::read_to_end(
+                            &mut tokio::io::AsyncReadExt::take(&mut pipe, limit as u64 + 1),
+                            &mut bytes,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        Ok(bytes)
+                    };
+                    let err_read = async {
+                        let Some(mut pipe) = stderr else {
+                            return Ok::<Vec<u8>, String>(Vec::new());
+                        };
+                        let mut bytes = Vec::new();
+                        tokio::io::AsyncReadExt::read_to_end(
+                            &mut tokio::io::AsyncReadExt::take(&mut pipe, 64 * 1024 + 1),
+                            &mut bytes,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        Ok(bytes)
+                    };
+                    let (stdout, stderr, status) =
+                        tokio::join!(read(stdout, 256 * 1024), err_read, child.wait());
+                    Ok::<_, String>((stdout?, stderr?, status.map_err(|e| e.to_string())?))
+                };
+                let (stdout, stderr, status) = tokio::time::timeout(Duration::from_secs(20), run)
+                    .await
+                    .map_err(|_| "the command timed out".to_string())?
+                    .map_err(|error: String| error)?;
+                let mut stdout = String::from_utf8_lossy(&stdout).to_string();
+                let mut stderr = String::from_utf8_lossy(&stderr).to_string();
+                if stdout.len() > 256 * 1024 {
+                    stdout.truncate(256 * 1024);
+                    stdout.push_str("\n… truncated");
+                }
+                if stderr.len() > 64 * 1024 {
+                    stderr.truncate(64 * 1024);
+                    stderr.push_str("\n… truncated");
+                }
+                Ok(json!({
+                    "status": status.code(),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }))
+            }
+            HostCall::SessionOpen { .. } | HostCall::Prompt { .. } | HostCall::Generate { .. } => {
+                Err("this call runs on the backend loop".into())
+            }
+        }
+    }
+}
+
 fn event_kind(event: &BackendEvent) -> &'static str {
     match event {
         BackendEvent::Connection(_) => "connection",
@@ -2110,6 +2212,7 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::ExtensionBlock { .. } => "extension-block",
         BackendEvent::ExtensionMentions { .. } => "extension-mentions",
         BackendEvent::ExtensionError { .. } => "extension-error",
+        BackendEvent::ExtensionLog { .. } => "extension-log",
         BackendEvent::ExtensionCompose { .. } => "extension-compose",
         BackendEvent::ExtensionAttach { .. } => "extension-attach",
         BackendEvent::ExtensionBadge { .. } => "extension-badge",

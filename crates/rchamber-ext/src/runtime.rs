@@ -37,7 +37,7 @@ pub struct SessionContext {
     pub directory: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum HostCall {
     Http {
         method: String,
@@ -81,7 +81,7 @@ pub enum HostCall {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum HostEffect {
     Toast {
         kind: String,
@@ -120,10 +120,66 @@ pub enum HostEffect {
 pub trait HostBridge: Send {
     fn call(&mut self, call: HostCall) -> Result<Json, String>;
     fn effect(&mut self, effect: HostEffect);
-    fn storage_get(&self, key: &str) -> Option<Json>;
-    fn storage_set(&mut self, key: &str, value: Json) -> Result<(), String>;
-    fn storage_delete(&mut self, key: &str) -> Result<bool, String>;
-    fn storage_keys(&self) -> Vec<String>;
+    fn log(&mut self, level: &str, message: &str) {
+        match level {
+            "error" => tracing::error!(target: "rchamber_ext", "{message}"),
+            "warn" => tracing::warn!(target: "rchamber_ext", "{message}"),
+            "debug" => tracing::debug!(target: "rchamber_ext", "{message}"),
+            _ => tracing::info!(target: "rchamber_ext", "{message}"),
+        }
+    }
+    fn storage_get(&self, _key: &str) -> Option<Json> {
+        None
+    }
+    fn storage_set(&mut self, _key: &str, _value: Json) -> Result<(), String> {
+        Err("this worker does not keep extension storage".into())
+    }
+    fn storage_delete(&mut self, _key: &str) -> Result<bool, String> {
+        Err("this worker does not keep extension storage".into())
+    }
+    fn storage_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+struct DeadlinePause {
+    deadline: Arc<AtomicU64>,
+    base: std::time::Instant,
+    saved: u64,
+}
+
+impl DeadlinePause {
+    fn start(deadline: Arc<AtomicU64>, base: std::time::Instant) -> Self {
+        let saved = deadline.load(Ordering::Relaxed);
+        Self {
+            deadline,
+            base,
+            saved,
+        }
+    }
+}
+
+impl Drop for DeadlinePause {
+    fn drop(&mut self) {
+        if self.saved > 0 {
+            let spent = self.base.elapsed().as_millis() as u64;
+            self.deadline
+                .store(self.saved.saturating_add(spent), Ordering::Relaxed);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HostGate {
+    deadline: Arc<AtomicU64>,
+    base: std::time::Instant,
+}
+
+impl HostGate {
+    fn run<T>(&self, work: impl FnOnce() -> T) -> T {
+        let _pause = DeadlinePause::start(self.deadline.clone(), self.base);
+        work()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -154,6 +210,7 @@ pub struct LuaRuntime {
     policy: Policy,
     context: Rc<RefCell<HostContext>>,
     bridge: Rc<RefCell<Box<dyn HostBridge>>>,
+    gate: HostGate,
     loaded: bool,
 }
 
@@ -236,6 +293,10 @@ impl LuaRuntime {
         };
         let context = Rc::new(RefCell::new(context));
         let bridge = Rc::new(RefCell::new(bridge));
+        let gate = HostGate {
+            deadline: deadline.clone(),
+            base,
+        };
         let mut runtime = Self {
             lua,
             deadline,
@@ -246,6 +307,7 @@ impl LuaRuntime {
             policy,
             context,
             bridge,
+            gate,
             loaded: false,
         };
         runtime.install_host()?;
@@ -415,9 +477,11 @@ impl LuaRuntime {
         let context = self.context.clone();
         let extension_id = self.policy.extension_id.clone();
         let extension_name = self.policy.extension_name.clone();
+        let gate = self.gate.clone();
 
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
             host.set(
                 "toast",
                 self.lua.create_function(move |_, value: Table| {
@@ -425,15 +489,18 @@ impl LuaRuntime {
                     let kind = value
                         .get::<Option<String>>("kind")?
                         .unwrap_or_else(|| "neutral".into());
-                    bridge
-                        .borrow_mut()
-                        .effect(HostEffect::Toast { kind, message });
+                    gate.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .effect(HostEffect::Toast { kind, message })
+                    });
                     Ok(())
                 })?,
             )?;
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
             let required = Rc::clone(&policy);
             host.set(
                 "compose",
@@ -443,41 +510,10 @@ impl LuaRuntime {
                     if send {
                         required.require("prompt")?;
                     }
-                    bridge
-                        .borrow_mut()
-                        .effect(HostEffect::Compose { text, send });
-                    Ok(())
-                })?,
-            )?;
-        }
-        {
-            let bridge = bridge.clone();
-            let required = Rc::clone(&policy);
-            host.set(
-                "prompt",
-                self.lua.create_function(move |_, value: Table| {
-                    required.require("prompt")?;
-                    let text = value.get::<String>("text")?;
-                    let send = value.get::<Option<bool>>("send")?.unwrap_or(false);
-                    bridge
-                        .borrow_mut()
-                        .effect(HostEffect::Prompt { text, send });
-                    Ok(())
-                })?,
-            )?;
-        }
-        {
-            let bridge = bridge.clone();
-            let required = Rc::clone(&policy);
-            host.set(
-                "attach",
-                self.lua.create_function(move |_, value: Table| {
-                    required.require("prompt")?;
-                    bridge.borrow_mut().effect(HostEffect::Attach {
-                        provider_id: value.get::<String>("provider_id")?,
-                        id: value.get::<String>("id")?,
-                        title: value.get::<String>("title")?,
-                        url: value.get::<Option<String>>("url")?,
+                    gate.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .effect(HostEffect::Compose { text, send })
                     });
                     Ok(())
                 })?,
@@ -485,28 +521,74 @@ impl LuaRuntime {
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
+            let required = Rc::clone(&policy);
             host.set(
-                "set_badge",
-                self.lua.create_function(move |_, count: Option<i64>| {
-                    bridge.borrow_mut().effect(HostEffect::SetBadge { count });
+                "prompt",
+                self.lua.create_function(move |_, value: Table| {
+                    required.require("prompt")?;
+                    let text = value.get::<String>("text")?;
+                    let send = value.get::<Option<bool>>("send")?.unwrap_or(false);
+                    gate.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .effect(HostEffect::Prompt { text, send })
+                    });
                     Ok(())
                 })?,
             )?;
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
+            let required = Rc::clone(&policy);
+            host.set(
+                "attach",
+                self.lua.create_function(move |_, value: Table| {
+                    required.require("prompt")?;
+                    let provider_id = value.get::<String>("provider_id")?;
+                    let id = value.get::<String>("id")?;
+                    let title = value.get::<String>("title")?;
+                    let url = value.get::<Option<String>>("url")?;
+                    gate.run(|| {
+                        bridge.borrow_mut().effect(HostEffect::Attach {
+                            provider_id,
+                            id,
+                            title,
+                            url,
+                        })
+                    });
+                    Ok(())
+                })?,
+            )?;
+        }
+        {
+            let bridge = bridge.clone();
+            let gate = gate.clone();
+            host.set(
+                "set_badge",
+                self.lua.create_function(move |_, count: Option<i64>| {
+                    gate.run(|| bridge.borrow_mut().effect(HostEffect::SetBadge { count }));
+                    Ok(())
+                })?,
+            )?;
+        }
+        {
+            let bridge = bridge.clone();
+            let gate = gate.clone();
             let required = Rc::clone(&policy);
             host.set(
                 "answer",
                 self.lua.create_function(move |_, text: String| {
                     required.require("prompt")?;
-                    bridge.borrow_mut().effect(HostEffect::Answer { text });
+                    gate.run(|| bridge.borrow_mut().effect(HostEffect::Answer { text }));
                     Ok(())
                 })?,
             )?;
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
             let required = policy.clone();
             host.set(
                 "open_url",
@@ -520,36 +602,41 @@ impl LuaRuntime {
                             "only http, https and mailto links can be opened".into(),
                         ));
                     }
-                    bridge.borrow_mut().effect(HostEffect::OpenUrl { url });
+                    gate.run(|| bridge.borrow_mut().effect(HostEffect::OpenUrl { url }));
                     Ok(())
                 })?,
             )?;
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
             let required = Rc::clone(&policy);
             host.set(
                 "clipboard",
                 self.lua.create_function(move |_, text: String| {
                     required.require("clipboard")?;
-                    bridge.borrow_mut().effect(HostEffect::Clipboard(text));
+                    gate.run(|| bridge.borrow_mut().effect(HostEffect::Clipboard(text)));
                     Ok(())
                 })?,
             )?;
         }
         {
             let bridge = bridge.clone();
+            let gate = gate.clone();
             let required = Rc::clone(&policy);
             let notify_name = extension_name.clone();
             host.set(
                 "notify",
                 self.lua.create_function(move |_, value: Table| {
                     required.require("notifications")?;
-                    bridge.borrow_mut().effect(HostEffect::Notify {
-                        title: value
-                            .get::<Option<String>>("title")?
-                            .unwrap_or_else(|| notify_name.clone()),
-                        body: value.get::<String>("body")?,
+                    let title = value
+                        .get::<Option<String>>("title")?
+                        .unwrap_or_else(|| notify_name.clone());
+                    let body = value.get::<String>("body")?;
+                    gate.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .effect(HostEffect::Notify { title, body })
                     });
                     Ok(())
                 })?,
@@ -587,10 +674,24 @@ impl LuaRuntime {
             )?;
         }
         {
+            let bridge = bridge.clone();
             host.set(
                 "log",
-                self.lua.create_function(move |_, message: String| {
-                    tracing::info!(target: "rchamber_ext", "{message}");
+                self.lua.create_function(move |_, value: Value| {
+                    let (level, message) = match value {
+                        Value::String(text) => (
+                            "info".to_string(),
+                            String::from_utf8_lossy(&text.as_bytes()).to_string(),
+                        ),
+                        Value::Table(table) => (
+                            table
+                                .get::<Option<String>>("level")?
+                                .unwrap_or_else(|| "info".into()),
+                            table.get::<String>("message")?,
+                        ),
+                        other => ("info".to_string(), format!("{:?}", lua_to_json(other, 0))),
+                    };
+                    bridge.borrow_mut().log(&level, &message);
                     Ok(())
                 })?,
             )?;
@@ -612,49 +713,60 @@ impl LuaRuntime {
         host: &Table,
         policy: Rc<PolicyView>,
     ) -> Result<(), RuntimeError> {
+        let gate = self.gate.clone();
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let lookup = gate.clone();
         host.set(
             "storage_get",
             self.lua.create_function(move |lua, key: String| {
                 required.require("storage")?;
-                let value = bridge.borrow().storage_get(&key).unwrap_or(Json::Null);
+                let value = lookup
+                    .run(|| bridge.borrow().storage_get(&key))
+                    .unwrap_or(Json::Null);
                 json_to_lua(lua, &value, 0)
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let write = gate.clone();
         host.set(
             "storage_set",
             self.lua
                 .create_function(move |_, (key, value): (String, Value)| {
                     required.require("storage")?;
                     let json = lua_to_json(value, 0);
-                    bridge
-                        .borrow_mut()
-                        .storage_set(&key, json)
-                        .map_err(mlua::Error::RuntimeError)
+                    write.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .storage_set(&key, json)
+                            .map_err(mlua::Error::RuntimeError)
+                    })
                 })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let delete = gate.clone();
         host.set(
             "storage_delete",
             self.lua.create_function(move |_, key: String| {
                 required.require("storage")?;
-                bridge
-                    .borrow_mut()
-                    .storage_delete(&key)
-                    .map_err(mlua::Error::RuntimeError)
+                delete.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .storage_delete(&key)
+                        .map_err(mlua::Error::RuntimeError)
+                })
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let keys = gate.clone();
         host.set(
             "storage_keys",
             self.lua.create_function(move |lua, _: ()| {
                 required.require("storage")?;
-                let keys = bridge.borrow().storage_keys();
+                let keys = keys.run(|| bridge.borrow().storage_keys());
                 json_to_lua(lua, &serde_json::to_value(keys).unwrap_or(Json::Null), 0)
             })?,
         )?;
@@ -662,8 +774,10 @@ impl LuaRuntime {
     }
 
     fn install_http(&mut self, host: &Table, policy: Rc<PolicyView>) -> Result<(), RuntimeError> {
+        let gate = self.gate.clone();
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let request = gate.clone();
         host.set(
             "http",
             self.lua.create_function(move |lua, value: Table| {
@@ -687,15 +801,17 @@ impl LuaRuntime {
                     })
                     .unwrap_or_default();
                 let body = value.get::<Option<String>>("body")?;
-                let answer = bridge
-                    .borrow_mut()
-                    .call(HostCall::Http {
-                        method,
-                        url,
-                        headers,
-                        body,
-                    })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let answer = request.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::Http {
+                            method,
+                            url,
+                            headers,
+                            body,
+                        })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &answer, 0)
             })?,
         )?;
@@ -703,16 +819,20 @@ impl LuaRuntime {
     }
 
     fn install_files(&mut self, host: &Table, policy: Rc<PolicyView>) -> Result<(), RuntimeError> {
+        let gate = self.gate.clone();
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let read = gate.clone();
         host.set(
             "read_file",
             self.lua.create_function(move |_, path: String| {
                 required.require("files")?;
-                let value = bridge
-                    .borrow_mut()
-                    .call(HostCall::ReadFile { path })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let value = read.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::ReadFile { path })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 value
                     .get("content")
                     .and_then(Json::as_str)
@@ -722,41 +842,50 @@ impl LuaRuntime {
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let write = gate.clone();
         host.set(
             "write_file",
             self.lua
                 .create_function(move |_, (path, content): (String, String)| {
                     required.require("files")?;
-                    bridge
-                        .borrow_mut()
-                        .call(HostCall::WriteFile { path, content })
-                        .map_err(mlua::Error::RuntimeError)?;
+                    write.run(|| {
+                        bridge
+                            .borrow_mut()
+                            .call(HostCall::WriteFile { path, content })
+                            .map_err(mlua::Error::RuntimeError)
+                    })?;
                     Ok(())
                 })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let list = gate.clone();
         host.set(
             "list_dir",
             self.lua.create_function(move |lua, path: String| {
                 required.require("files")?;
-                let value = bridge
-                    .borrow_mut()
-                    .call(HostCall::ListDir { path })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let value = list.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::ListDir { path })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &value, 0)
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let stat = gate;
         host.set(
             "stat",
             self.lua.create_function(move |lua, path: String| {
                 required.require("files")?;
-                let value = bridge
-                    .borrow_mut()
-                    .call(HostCall::Stat { path })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let value = stat.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::Stat { path })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &value, 0)
             })?,
         )?;
@@ -768,21 +897,26 @@ impl LuaRuntime {
         host: &Table,
         policy: Rc<PolicyView>,
     ) -> Result<(), RuntimeError> {
+        let gate = self.gate.clone();
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let list = gate.clone();
         host.set(
             "sessions",
             self.lua.create_function(move |lua, _: ()| {
                 required.require("sessions")?;
-                let value = bridge
-                    .borrow_mut()
-                    .call(HostCall::SessionsList)
-                    .map_err(mlua::Error::RuntimeError)?;
+                let value = list.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::SessionsList)
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &value, 0)
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let start = gate.clone();
         host.set(
             "start_session",
             self.lua.create_function(move |lua, value: Option<Table>| {
@@ -797,38 +931,46 @@ impl LuaRuntime {
                     .map(|table| table.get::<Option<String>>("title"))
                     .transpose()?
                     .flatten();
-                let answer = bridge
-                    .borrow_mut()
-                    .call(HostCall::SessionStart { project, title })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let answer = start.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::SessionStart { project, title })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &answer, 0)
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let open = gate.clone();
         host.set(
             "open_session",
             self.lua.create_function(move |_, id: String| {
                 required.require("sessions")?;
-                bridge
-                    .borrow_mut()
-                    .call(HostCall::SessionOpen { id })
-                    .map_err(mlua::Error::RuntimeError)?;
+                open.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::SessionOpen { id })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 Ok(())
             })?,
         )?;
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let prompt = gate;
         host.set(
             "prompt_session",
             self.lua.create_function(move |_, value: Table| {
                 required.require("prompt")?;
                 let session = value.get::<Option<String>>("session")?;
                 let text = value.get::<String>("text")?;
-                bridge
-                    .borrow_mut()
-                    .call(HostCall::Prompt { session, text })
-                    .map_err(mlua::Error::RuntimeError)?;
+                prompt.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::Prompt { session, text })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 Ok(())
             })?,
         )?;
@@ -842,16 +984,19 @@ impl LuaRuntime {
     ) -> Result<(), RuntimeError> {
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let generate = self.gate.clone();
         host.set(
             "generate",
             self.lua.create_function(move |_, value: Table| {
                 required.require("model")?;
                 let prompt = value.get::<String>("prompt")?;
                 let system = value.get::<Option<String>>("system")?;
-                let answer = bridge
-                    .borrow_mut()
-                    .call(HostCall::Generate { prompt, system })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let answer = generate.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::Generate { prompt, system })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 answer
                     .get("text")
                     .and_then(Json::as_str)
@@ -865,6 +1010,7 @@ impl LuaRuntime {
     fn install_exec(&mut self, host: &Table, policy: Rc<PolicyView>) -> Result<(), RuntimeError> {
         let bridge = self.bridge.clone();
         let required = Rc::clone(&policy);
+        let exec = self.gate.clone();
         host.set(
             "exec",
             self.lua.create_function(move |lua, value: Table| {
@@ -880,10 +1026,12 @@ impl LuaRuntime {
                     })
                     .unwrap_or_default();
                 let cwd = value.get::<Option<String>>("cwd")?;
-                let answer = bridge
-                    .borrow_mut()
-                    .call(HostCall::Exec { command, args, cwd })
-                    .map_err(mlua::Error::RuntimeError)?;
+                let answer = exec.run(|| {
+                    bridge
+                        .borrow_mut()
+                        .call(HostCall::Exec { command, args, cwd })
+                        .map_err(mlua::Error::RuntimeError)
+                })?;
                 json_to_lua(lua, &answer, 0)
             })?,
         )?;
@@ -1214,5 +1362,39 @@ mod host_tests {
             .unwrap();
         let error = runtime.call_multi("panel", Vec::new()).unwrap_err();
         assert!(matches!(error, RuntimeError::Timeout), "{error}");
+    }
+
+    struct Slow(std::time::Duration);
+
+    impl HostBridge for Slow {
+        fn call(&mut self, _call: HostCall) -> Result<Json, String> {
+            std::thread::sleep(self.0);
+            Ok(Json::Null)
+        }
+        fn effect(&mut self, _effect: HostEffect) {}
+    }
+
+    #[test]
+    fn a_slow_host_call_does_not_count_against_the_deadline() {
+        let mut runtime = LuaRuntime::new(
+            &manifest(),
+            &["files".to_string()],
+            HostContext::default(),
+            Box::new(Slow(std::time::Duration::from_millis(150))),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        runtime.policy.timeout_ms = 50;
+        runtime
+            .load_source(
+                "function status() host.stat('x') local n = 0 for i = 1, 200000 do n = n + i end return { { kind = 'text', markdown = tostring(n) } } end",
+                "main.lua",
+            )
+            .unwrap();
+        let value = runtime.call_multi("status", Vec::new()).unwrap().unwrap();
+        assert_eq!(
+            value[0]["markdown"],
+            (1..=200000i64).sum::<i64>().to_string()
+        );
     }
 }

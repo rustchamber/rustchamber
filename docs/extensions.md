@@ -46,9 +46,11 @@ The same flow works from a chat link:
 | Instructions | Add a short note to what agents read |
 | Events | Hear when a turn finishes or asks for permission |
 
-An extension runs in a Lua sandbox with a 32 MiB memory limit and a 5 second limit per call.
-`require`, `io`, `os`, `package` and bytecode loading are not available. Storage is capped at
-2 MiB per extension, 64 KiB per value and 2,000 keys.
+An extension runs in its own process with a 32 MiB memory limit and a 5 second limit per
+call. `require`, `io`, `os`, `package` and bytecode loading are not available. Storage is
+capped at 2 MiB per extension, 64 KiB per value and 2,000 keys. A call that keeps running
+after its limit is stopped and the extension process is killed, so a pathological extension
+cannot take the app down with it.
 
 Disabling an extension stops its worker and hides every surface but keeps its data, grants
 and settings. Removing it deletes the data and the copied package. A folder install is never
@@ -118,4 +120,7 @@ A complete example with every surface is at
 - The `exec` capability is a real shell with your user's access. Prefer the host API.
 - A Lua error is reported as a toast and the extension stays installed. Repeated failures
   do not crash the app.
-- Calls run on a worker thread. A slow extension cannot freeze the interface.
+- Each extension runs in its own process. A slow or stuck call is interrupted, and the
+  process is replaced on the next reload instead of sharing the app's address space.
+- Settings → Extensions shows a failed-call count and a log viewer fed by `host.log` and by
+  the extension's stderr.

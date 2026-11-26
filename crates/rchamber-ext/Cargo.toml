@@ -23,3 +23,11 @@ zip.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+test-worker = []
+
+[[bin]]
+name = "ext-worker"
+path = "src/bin/ext-worker.rs"
+required-features = ["test-worker"]

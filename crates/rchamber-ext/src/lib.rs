@@ -17,7 +17,9 @@ pub use manifest::{
     Runtime, RuntimeKind, StatusSection, ToolRenderer,
 };
 pub use openui::{ParseError, parse as parse_openui};
-pub use registry::{InstallSource, InstalledExtension, Registry, RegistryError, default_root};
+pub use registry::{
+    InstallSource, InstalledExtension, Registry, RegistryError, default_root, expand_home,
+};
 pub use runtime::{
     HostBridge, HostCall, HostContext, HostEffect, LuaRuntime, RuntimeError, SessionContext,
 };
@@ -28,5 +30,6 @@ pub use widget::{
     StepItem, StepStatus, TabItem, Tone, Widget,
 };
 pub use worker::{
-    WorkerEvent, WorkerHandle, WorkerRequest, spawn as spawn_worker, spawn_with_events,
+    ProcessSpawn, WORKER_FLAG, WorkerEvent, WorkerHandle, WorkerRequest, serve_stdio,
+    spawn_process, spawn_thread,
 };
