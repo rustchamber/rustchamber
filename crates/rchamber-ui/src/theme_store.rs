@@ -466,7 +466,7 @@ fn build_palette(theme: &ThemeDoc) -> Palette {
     };
     let primary_text = readable_on(bg, primary, dark);
 
-    let border = pick(&c.interactive.border, base.border);
+    let border = theme::readable_edge(pick(&c.interactive.border, base.border), bg);
     let border_hover = pick(&c.interactive.border_hover, base.border_hover);
     let border_focus = pick(
         &c.interactive.border_focus,
@@ -733,6 +733,21 @@ mod tests {
                 assert_eq!(palette.dark, dark, "{id}");
                 assert_ne!(palette.bg, palette.fg, "{id}");
                 assert!(theme::contrast_ratio(palette.fg, palette.bg) >= 2.0, "{id}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_theme_keeps_a_visible_divider() {
+        for dark in [true, false] {
+            for (id, _) in theme_options(dark) {
+                let palette = theme_palette(&id, dark).unwrap_or_else(|| panic!("{id}"));
+                let shown = palette.bg.blend(palette.border);
+                assert!(
+                    theme::contrast_ratio(shown, palette.bg) >= theme::EDGE_CONTRAST - 0.01,
+                    "{id} draws a divider at {:.2}:1",
+                    theme::contrast_ratio(shown, palette.bg)
+                );
             }
         }
     }

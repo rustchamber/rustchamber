@@ -371,6 +371,7 @@ pub struct UiState {
     pub extension_path: String,
     pub extension_approval: Option<String>,
     pub extension_remove: Option<String>,
+    pub extension_logs: HashSet<String>,
 }
 
 impl UiState {
@@ -1752,7 +1753,7 @@ impl eframe::App for RustChamber {
                 .show(root, |ui| {
                     let card = ui.max_rect();
                     ui.painter().vline(
-                        card.left(),
+                        card.left() + theme::BORDER,
                         card.y_range(),
                         Stroke::new(theme::BORDER, fade(p.border, zone_exposure)),
                     );
@@ -1785,7 +1786,7 @@ impl eframe::App for RustChamber {
                             let card = ui.max_rect();
                             ui.painter().hline(
                                 card.x_range(),
-                                card.top(),
+                                card.top() + theme::BORDER,
                                 Stroke::new(theme::BORDER, fade(p.border, bottom_exposure)),
                             );
                             ui.set_opacity(bottom_exposure);
@@ -1858,10 +1859,11 @@ impl eframe::App for RustChamber {
 
         if layout.zone > 0.5 && zone_exposure > 0.99 && !expanded {
             let zone_left = ctx.content_rect().right() - layout.rail - layout.zone;
+            let border = zone_left + theme::BORDER * 0.5;
             let handle = egui::Rect::from_min_max(
-                egui::pos2(zone_left + 4.0, header::HEADER_HEIGHT),
+                egui::pos2(border - ZONE_HANDLE * 0.5, header::HEADER_HEIGHT),
                 egui::pos2(
-                    zone_left + 4.0 + ZONE_HANDLE,
+                    border + ZONE_HANDLE * 0.5,
                     ctx.content_rect().bottom() - 8.0,
                 ),
             );
@@ -1899,11 +1901,12 @@ impl eframe::App for RustChamber {
         }
 
         if bottom_exposure > 0.99 && !expanded {
+            let border = ctx.content_rect().bottom() - bottom + theme::BORDER * 0.5;
             let handle = egui::Rect::from_min_max(
-                egui::pos2(layout.sidebar, ctx.content_rect().bottom() - bottom + 4.0),
+                egui::pos2(layout.sidebar, border - BOTTOM_HANDLE * 0.5),
                 egui::pos2(
                     ctx.content_rect().right() - layout.rail,
-                    ctx.content_rect().bottom() - bottom + 4.0 + BOTTOM_HANDLE,
+                    border + BOTTOM_HANDLE * 0.5,
                 ),
             );
             let response = egui::Area::new(Id::unique("shell/bottom-resize"))
