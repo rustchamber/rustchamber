@@ -1142,6 +1142,7 @@ fn footer(
             .layout(Layout::left_to_right(Align::Center)),
     );
     footer_ui.set_clip_rect(inner);
+    footer_ui.spacing_mut().item_spacing.x = FOOTER_GAP;
     footer_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         match state.tab {
             Tab::Home => {
@@ -1153,7 +1154,7 @@ fn footer(
                         "Added",
                         Some(Icon::Check),
                         ButtonVariant::Outline,
-                        ButtonSize::Md,
+                        ButtonSize::App,
                         false,
                         p,
                     );
@@ -1168,7 +1169,7 @@ fn footer(
                         &format!("Add '{name}'"),
                         Some(Icon::Plus),
                         ButtonVariant::Primary,
-                        ButtonSize::Md,
+                        ButtonSize::App,
                         target.is_dir(),
                         p,
                     )
@@ -1185,7 +1186,7 @@ fn footer(
                         "Cloning…",
                         None,
                         ButtonVariant::Outline,
-                        ButtonSize::Md,
+                        ButtonSize::App,
                         false,
                         p,
                     );
@@ -1218,7 +1219,7 @@ fn footer(
                 },
                 Some(Icon::FolderOpen),
                 ButtonVariant::Outline,
-                ButtonSize::Sm,
+                ButtonSize::App,
                 path.is_dir(),
                 p,
             )

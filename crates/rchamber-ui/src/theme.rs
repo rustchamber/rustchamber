@@ -19,11 +19,12 @@ pub const MONO: &str = "jetbrains-mono";
 pub const SERIF: &str = "instrument-serif";
 pub const SERIF_ITALIC: &str = "instrument-serif-italic";
 
-pub const HAIRLINE: f32 = 0.5;
+pub const HAIRLINE: f32 = 1.0;
 pub const BORDER: f32 = 1.0;
 
 pub const EDGE_MUTED_ALPHA: f32 = 0.40;
 pub const EDGE_ALPHA: f32 = 0.70;
+pub const EDGE_CONTRAST: f32 = 1.4;
 
 pub const INK_LUMINANCE_THRESHOLD: f32 = 0.18;
 pub const INK_CONTRAST: f32 = 4.5;
@@ -295,6 +296,7 @@ impl Palette {
             diff_removed_bg: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 38),
             diff_removed_emph: Color32::from_rgba_unmultiplied(0xDA, 0x5B, 0x4A, 77),
         };
+        palette.border = readable_edge(palette.border, palette.bg);
         palette.border_soft = palette.edge_muted();
         palette
     }
@@ -380,6 +382,7 @@ impl Palette {
             diff_removed_bg: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 26),
             diff_removed_emph: Color32::from_rgba_unmultiplied(0xB7, 0x49, 0x3F, 56),
         };
+        palette.border = readable_edge(palette.border, palette.bg);
         palette.border_soft = palette.edge_muted();
         palette
     }
@@ -798,6 +801,26 @@ fn blend_color(a: Color32, b: Color32, t: f32) -> Color32 {
         channel(ag, bg),
         channel(ab, bb),
         channel(aa, ba),
+    )
+}
+
+pub fn readable_edge(color: Color32, bg: Color32) -> Color32 {
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    let ratio = |value: Color32| contrast_ratio(bg.blend(value), bg);
+    if ratio(color) >= EDGE_CONTRAST {
+        return color;
+    }
+    for step in 1..=12 {
+        let alpha = (a as f32 + (255.0 - a as f32) * step as f32 / 12.0).round() as u8;
+        let candidate = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+        if ratio(candidate) >= EDGE_CONTRAST {
+            return candidate;
+        }
+    }
+    readable_ink(
+        Color32::from_rgba_unmultiplied(r, g, b, 255),
+        bg,
+        EDGE_CONTRAST,
     )
 }
 
@@ -1391,11 +1414,11 @@ mod tests {
         assert_eq!(p.fade(p.bg, 0.5).a(), 128);
         assert_eq!(
             p.edge_muted().a(),
-            (p.border.a() as f32 * 0.40).round() as u8
+            (p.border.a() as f32 * EDGE_MUTED_ALPHA).round() as u8
         );
         assert_eq!(
             p.edge_color().a(),
-            (p.border.a() as f32 * 0.70).round() as u8
+            (p.border.a() as f32 * EDGE_ALPHA).round() as u8
         );
     }
 
@@ -1405,8 +1428,20 @@ mod tests {
         let dark = Palette::dark();
         assert_eq!(light.border_soft, light.edge_muted());
         assert_eq!(dark.border_soft, dark.edge_muted());
-        assert_eq!(light.border_soft.a(), 76);
-        assert_eq!(dark.border_soft.a(), 76);
+        assert!(light.border_soft.a() < light.border.a());
+        assert!(dark.border_soft.a() < dark.border.a());
+    }
+
+    #[test]
+    fn dividers_stay_visible_against_the_background() {
+        for palette in [Palette::dark(), Palette::light()] {
+            let shown = palette.bg.blend(palette.border);
+            assert!(
+                contrast_ratio(shown, palette.bg) >= EDGE_CONTRAST,
+                "{} border is too close to its background",
+                if palette.dark { "dark" } else { "light" }
+            );
+        }
     }
 
     #[test]
@@ -1421,7 +1456,7 @@ mod tests {
 
     #[test]
     fn token_scale_matches_reference() {
-        assert_eq!(HAIRLINE, 0.5);
+        assert_eq!(HAIRLINE, 1.0);
         assert_eq!(BORDER, 1.0);
         assert_eq!(radius::XS, 4);
         assert_eq!(radius::SM, 5);

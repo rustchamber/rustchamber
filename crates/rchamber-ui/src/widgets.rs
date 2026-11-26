@@ -782,15 +782,15 @@ pub fn link_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) ->
 }
 
 pub fn ghost_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Ghost, ButtonSize::Sm, p)
+    button(ui, label, icon, ButtonVariant::Ghost, ButtonSize::App, p)
 }
 
 pub fn outline_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Outline, ButtonSize::Sm, p)
+    button(ui, label, icon, ButtonVariant::Outline, ButtonSize::App, p)
 }
 
 pub fn subtle_button(ui: &mut Ui, label: &str, icon: Option<Icon>, p: &Palette) -> Response {
-    button(ui, label, icon, ButtonVariant::Subtle, ButtonSize::Sm, p)
+    button(ui, label, icon, ButtonVariant::Subtle, ButtonSize::App, p)
 }
 
 pub fn chip(ui: &mut Ui, label: &str, icon: Option<Icon>, selected: bool, p: &Palette) -> Response {
