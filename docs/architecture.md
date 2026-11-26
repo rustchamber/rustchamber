@@ -132,7 +132,7 @@ before delivery.
 
 An extension is a folder with `rchamber.json` and a Lua entry point. The registry lives in
 the app data directory (`extensions/extensions.json`), installs are approved capability by
-capability, and each enabled extension gets a worker thread with its own `mlua` state. The
+capability, and each enabled extension gets its own process with its own `mlua` state. The
 sandbox exposes only the host functions the manifest asked for: storage, prompts, sessions,
 project files, allowlisted HTTPS origins, notifications, clipboard and, when explicitly
 approved, `exec`.
@@ -144,11 +144,15 @@ block written by the model and a block drawn by an extension use one renderer. A
 forms return a `BlockResponse`; a chat block sends it as a user message, a panel or status
 section routes it back to the extension's `command` function.
 
-The `rchamber-ext` worker communicates with the backend actor through two channels: worker
-results (`WorkerEvent`) and host calls/effects (`BridgeMessage`). A host call blocks the
-extension thread only; the UI keeps painting. Extension instructions are appended to the
-prompt just before it is sent, and `turn.finished` / `permission.asked` events are broadcast
-to extensions that declared them.
+The worker is the app binary re-executed with `--ext-worker`: newline-delimited JSON frames
+over stdin/stdout carry calls, results, logs, effects and host calls. Host calls are
+answered off the backend actor loop, so a slow HTTP request or command never stalls
+sessions or prompts; the extension's Lua deadline is paused while a host call is in flight.
+The app still keeps a thread-based worker for tests and as a fallback when the process
+cannot start. `WorkerEvent` carries results and logs, `BridgeMessage` carries host
+calls/effects from a thread worker, and `WorkerRequest::Reply` answers a process worker.
+Extension instructions are appended to the prompt just before it is sent, and
+`turn.finished` / `permission.asked` events are broadcast to extensions that declared them.
 
 ## Theme engine
 
@@ -165,6 +169,8 @@ compiled into the binary.
 
 - `cargo test --workspace` covers parsing, state projection, layout math, editor behavior,
   key encoding, and theme resolution.
+- `cargo test -p rchamber-ext --features test-worker` spawns the extension worker as a real
+  child process and round-trips calls, host calls, storage and logs over its pipe.
 - `cargo clippy --workspace --all-targets -- -D warnings` is clean.
 - CI checks formatting, lints, and tests, then builds the workspace on Linux, macOS, and
   Windows. `scripts/package-linux.sh` produces the Linux release tarball used by the release

@@ -329,8 +329,8 @@ backend/UI split keeps network latency out of the frame loop.
 
 A webview would have been faster to ship. The goal here was a native binary with no
 JavaScript runtime, a real PTY, and direct control over how diffs and terminal cells are
-drawn. Extensions keep that promise: they run as sandboxed Lua and draw through the native
-widget renderer, not an embedded browser.
+drawn. Extensions keep that promise: they run as sandboxed Lua in their own process and draw
+through the native widget renderer, not an embedded browser.
 
 ## Status
 

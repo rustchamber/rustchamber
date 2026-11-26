@@ -162,7 +162,8 @@ host.answer("the user's choice")-- a block that answers the agent
 host.open_url("https://...")
 host.clipboard("text")
 host.notify({title = "Deploys", body = "api is down"})
-host.log("debug message")       -- tracing only
+host.log("debug message")       -- shown in Settings → Extensions
+host.log({level = "warn", message = "slow"})
 host.storage_get("key")         -- JSON value or nil
 host.storage_set("key", value)
 host.storage_delete("key")

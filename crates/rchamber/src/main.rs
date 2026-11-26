@@ -5,6 +5,9 @@ mod platform;
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == rchamber_ext::WORKER_FLAG) {
+        std::process::exit(rchamber_ext::serve_stdio());
+    }
     if args
         .get(1)
         .is_some_and(|arg| arg == "--version" || arg == "-V")
@@ -18,7 +21,7 @@ fn main() -> eframe::Result<()> {
             eprintln!("usage: rchamber ext check <folder>");
             std::process::exit(2);
         };
-        match rchamber_ext::check_package(std::path::Path::new(path)) {
+        match rchamber_ext::check_package(&rchamber_ext::expand_home(std::path::Path::new(path))) {
             Ok(report) => {
                 println!("{} {} ({})", report.name, report.version, report.id);
                 if report.capabilities.is_empty() {

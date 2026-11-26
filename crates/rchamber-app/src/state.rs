@@ -244,6 +244,15 @@ pub struct ExtensionFailure {
     pub message: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExtensionLogLine {
+    pub level: String,
+    pub message: String,
+    pub at: f64,
+}
+
+pub const EXTENSION_LOG_LINES: usize = 200;
+
 #[derive(Default)]
 pub struct ExtensionUiState {
     pub installed: Vec<rchamber_ext::InstalledExtension>,
@@ -252,6 +261,8 @@ pub struct ExtensionUiState {
     pub panel_revisions: HashMap<String, u64>,
     pub blocks: HashMap<String, Vec<Widget>>,
     pub errors: HashMap<String, ExtensionFailure>,
+    pub failures: HashMap<String, u64>,
+    pub logs: HashMap<String, std::collections::VecDeque<ExtensionLogLine>>,
     pub badges: HashMap<String, i64>,
     pub mentions: Vec<crate::extensions::MentionRow>,
 }
@@ -268,6 +279,34 @@ impl ExtensionUiState {
 
     pub fn panel_revision(&self, extension_id: &str) -> u64 {
         self.panel_revisions.get(extension_id).copied().unwrap_or(0)
+    }
+
+    pub fn log(&mut self, extension_id: &str, level: impl Into<String>, message: String) {
+        let lines = self.logs.entry(extension_id.to_string()).or_default();
+        lines.push_back(ExtensionLogLine {
+            level: level.into(),
+            message,
+            at: now_ms(),
+        });
+        while lines.len() > EXTENSION_LOG_LINES {
+            lines.pop_front();
+        }
+    }
+
+    pub fn lines(&self, extension_id: &str) -> impl Iterator<Item = &ExtensionLogLine> {
+        self.logs
+            .get(extension_id)
+            .into_iter()
+            .flat_map(std::collections::VecDeque::iter)
+    }
+
+    pub fn failure_count(&self, extension_id: &str) -> u64 {
+        self.failures.get(extension_id).copied().unwrap_or(0)
+    }
+
+    pub fn clear_logs(&mut self, extension_id: &str) {
+        self.logs.remove(extension_id);
+        self.failures.remove(extension_id);
     }
 }
 
@@ -567,6 +606,16 @@ impl AppModel {
                     .retain(|id, _| active.contains(id));
                 self.extensions.badges.retain(|id, _| active.contains(id));
                 self.extensions.errors.retain(|id, _| active.contains(id));
+                let installed: HashSet<String> = self
+                    .extensions
+                    .installed
+                    .iter()
+                    .map(|extension| extension.manifest.id.clone())
+                    .collect();
+                self.extensions
+                    .failures
+                    .retain(|id, _| installed.contains(id));
+                self.extensions.logs.retain(|id, _| installed.contains(id));
                 self.extensions
                     .mentions
                     .retain(|row| active.contains(&row.extension_id));
@@ -647,10 +696,25 @@ impl AppModel {
                         message: message.clone(),
                     },
                 );
+                let count = self
+                    .extensions
+                    .failures
+                    .entry(extension_id.clone())
+                    .or_default();
+                *count = count.saturating_add(1);
+                self.extensions
+                    .log(&extension_id, "error", format!("{method}: {message}"));
                 self.toast(
                     ToastKind::Error,
                     format!("Extension {extension_id} failed in {method}: {message}"),
                 );
+            }
+            BackendEvent::ExtensionLog {
+                extension_id,
+                level,
+                message,
+            } => {
+                self.extensions.log(&extension_id, level, message);
             }
             BackendEvent::ExtensionCompose { text, .. } => {
                 self.pending_compose = Some(text);
@@ -1792,6 +1856,43 @@ mod tests {
             value: serde_json::json!([{ "kind": "heading", "text": "Hello" }]),
         });
         assert!(!model.extensions.errors.contains_key("demo"));
+    }
+
+    #[test]
+    fn extension_failures_and_logs_are_counted_and_capped() {
+        let mut model = AppModel::default();
+        model.apply(BackendEvent::ExtensionError {
+            call_id: "status".into(),
+            extension_id: "demo".into(),
+            method: "status".into(),
+            message: "boom".into(),
+        });
+        assert_eq!(model.extensions.failure_count("demo"), 1);
+        assert!(
+            model
+                .extensions
+                .lines("demo")
+                .any(|line| line.level == "error")
+        );
+
+        model.apply(BackendEvent::ExtensionLog {
+            extension_id: "demo".into(),
+            level: "info".into(),
+            message: "hello".into(),
+        });
+        assert_eq!(model.extensions.lines("demo").count(), 2);
+
+        for index in 0..(EXTENSION_LOG_LINES * 2) {
+            model
+                .extensions
+                .log("demo", "info", format!("line {index}"));
+        }
+        assert_eq!(model.extensions.lines("demo").count(), EXTENSION_LOG_LINES);
+        assert_eq!(model.extensions.failure_count("demo"), 1);
+
+        model.extensions.clear_logs("demo");
+        assert_eq!(model.extensions.failure_count("demo"), 0);
+        assert_eq!(model.extensions.lines("demo").count(), 0);
     }
 
     #[test]

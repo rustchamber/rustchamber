@@ -249,6 +249,7 @@ fn card(ui: &mut Ui, app: &mut RustChamber, p: &Palette, extension: &InstalledEx
                     app.ui.extension_remove = Some(id.clone());
                 }
             });
+            health(ui, app, p, &id);
             if let Some(error) = app
                 .model
                 .extensions
@@ -262,6 +263,90 @@ fn card(ui: &mut Ui, app: &mut RustChamber, p: &Palette, extension: &InstalledEx
                         .font(theme::font(theme::TEXT_META))
                         .color(p.red),
                 );
+            }
+        });
+}
+
+fn health(ui: &mut Ui, app: &mut RustChamber, p: &Palette, id: &str) {
+    let failures = app.model.extensions.failure_count(id);
+    let lines = app
+        .model
+        .extensions
+        .logs
+        .get(id)
+        .map_or(0, |lines| lines.len());
+    if failures == 0 && lines == 0 {
+        return;
+    }
+    let open = app.ui.extension_logs.contains(id);
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if failures > 0 {
+            ui.label(
+                RichText::new(if failures == 1 {
+                    "1 failed call".to_string()
+                } else {
+                    format!("{failures} failed calls")
+                })
+                .font(theme::font(theme::TEXT_META))
+                .color(p.coral),
+            );
+        }
+        let label = if lines > 0 {
+            format!("Logs ({lines})")
+        } else {
+            "Logs".to_string()
+        };
+        if widgets::ghost_button(ui, &label, Some(Icon::Terminal), p).clicked() {
+            if open {
+                app.ui.extension_logs.remove(id);
+            } else {
+                app.ui.extension_logs.insert(id.to_string());
+            }
+        }
+    });
+    if !app.ui.extension_logs.contains(id) {
+        return;
+    }
+    ui.add_space(8.0);
+    egui::Frame::new()
+        .fill(p.bg_soft)
+        .stroke(Stroke::new(theme::HAIRLINE, p.border_soft))
+        .corner_radius(CornerRadius::same(theme::radius::MD))
+        .inner_margin(Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if lines == 0 {
+                ui.label(
+                    RichText::new("No log lines yet. Use host.log in the extension.")
+                        .font(theme::font(theme::TEXT_META))
+                        .color(p.fg_faint),
+                );
+            } else {
+                ScrollArea::vertical()
+                    .max_height(180.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        for line in app.model.extensions.lines(id) {
+                            let color = match line.level.as_str() {
+                                "error" => p.red,
+                                "warn" => p.coral,
+                                "debug" => p.fg_faint,
+                                _ => p.fg_muted,
+                            };
+                            ui.label(
+                                RichText::new(format!("{} · {}", line.level, line.message))
+                                    .font(theme::font_mono(11.0))
+                                    .color(color),
+                            );
+                        }
+                    });
+            }
+            ui.add_space(6.0);
+            if widgets::ghost_button(ui, "Clear", Some(Icon::Trash), p).clicked() {
+                app.model.extensions.clear_logs(id);
             }
         });
 }

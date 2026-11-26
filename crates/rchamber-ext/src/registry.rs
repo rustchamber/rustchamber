@@ -201,6 +201,7 @@ impl Registry {
     }
 
     pub fn install_path(&mut self, path: &Path) -> Result<InstalledExtension, RegistryError> {
+        let path = expand_home(path);
         let path = path.canonicalize().map_err(|source| RegistryError::Io {
             path: path.to_path_buf(),
             source,
@@ -233,6 +234,8 @@ impl Registry {
         &mut self,
         archive: &Path,
     ) -> Result<InstalledExtension, RegistryError> {
+        let archive = expand_home(archive);
+        let archive = archive.as_path();
         let file = std::fs::File::open(archive).map_err(|source| RegistryError::Io {
             path: archive.to_path_buf(),
             source,
@@ -441,6 +444,26 @@ pub fn default_root() -> PathBuf {
         .join("extensions")
 }
 
+pub fn expand_home(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    let Some(rest) = text.strip_prefix('~') else {
+        return path.to_path_buf();
+    };
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return path.to_path_buf();
+    }
+    let Some(home) = directories::BaseDirs::new().map(|base| base.home_dir().to_path_buf()) else {
+        return path.to_path_buf();
+    };
+    if rest.is_empty() {
+        home
+    } else {
+        home.join(rest.trim_start_matches('/'))
+    }
+}
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -545,5 +568,26 @@ mod tests {
         registry.remove("zipped").unwrap();
         assert!(registry.get("zipped").is_none());
         assert!(!installed.root.exists());
+    }
+
+    #[test]
+    fn expands_a_home_prefixed_path() {
+        let home = directories::BaseDirs::new()
+            .expect("a home directory")
+            .home_dir()
+            .to_path_buf();
+        assert_eq!(
+            expand_home(Path::new("~/extensions/lab")),
+            home.join("extensions/lab")
+        );
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(
+            expand_home(Path::new("relative/lab")),
+            PathBuf::from("relative/lab")
+        );
+        assert_eq!(
+            expand_home(Path::new("~someone/lab")),
+            PathBuf::from("~someone/lab")
+        );
     }
 }

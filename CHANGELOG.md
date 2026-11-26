@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Extensions run in their own process instead of a thread in the app: a runaway call is
+  killed without touching the window, and reloading replaces the process.
+- Host calls for HTTP, commands and the filesystem now run off the backend loop, so a slow
+  extension request no longer stalls sessions, prompts and the rest of the app.
+- A host call no longer counts against the extension's 5 second limit, so a 20 second HTTP
+  request cannot poison an otherwise successful call.
+- Settings → Extensions has a per-extension log viewer fed by `host.log` and stderr, plus a
+  failed-call counter with a Clear action.
+- `host.log` accepts `{level, message}` to tag a line as debug, info, warn or error.
+- Dividers are a full 1px instead of a half-point hairline, and every theme now gets a
+  border at 1.4:1 against its background, so panels and table rows no longer vanish.
+- The right and bottom panels draw their divider inside their own edge, so the line is
+  there when the panel opens instead of only after a resize.
+- The Add project footer gives both buttons the same height and an 8-point gap instead of
+  gluing a smaller "Open in Finder" to the primary action.
+- The right and bottom panels can be dragged by their divider itself: the resize target is
+  centered on the line instead of sitting 4 points inside the panel.
+- Ghost, outline and subtle buttons share the primary button's height, so actions that sit
+  side by side no longer come in two different sizes.
+
 ## 0.2.10 - 2026-11-09
 
 - Messages refresh again after a session moves between directories: the wrapped `previous`

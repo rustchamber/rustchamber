@@ -242,6 +242,11 @@ pub enum BackendEvent {
         method: String,
         message: String,
     },
+    ExtensionLog {
+        extension_id: String,
+        level: String,
+        message: String,
+    },
     ExtensionCompose {
         text: String,
         send: bool,
