@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.11 - 2026-11-26
 
+- The workbench is denser and calmer: tighter rails, list rows and panel chrome leave more
+  room for the conversation.
+- X11 keeps 96 DPI when a monitor reports a bogus physical size, so the window no longer
+  renders at the wrong scale on those setups.
 - Extensions run in their own process instead of a thread in the app: a runaway call is
   killed without touching the window, and reloading replaces the process.
 - Host calls for HTTP, commands and the filesystem now run off the backend loop, so a slow
